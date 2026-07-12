@@ -1,0 +1,26 @@
+export const JUDGE_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "sideAArgumentationScore",
+    "sideAInteractionScore",
+    "sideAFactualReliabilityScore",
+    "sideBArgumentationScore",
+    "sideBInteractionScore",
+    "sideBFactualReliabilityScore",
+    "overallReason",
+    "sideAFeedback",
+    "sideBFeedback",
+  ],
+  properties: {
+    sideAArgumentationScore: { type: "integer" },
+    sideAInteractionScore: { type: "integer" },
+    sideAFactualReliabilityScore: { type: "integer" },
+    sideBArgumentationScore: { type: "integer" },
+    sideBInteractionScore: { type: "integer" },
+    sideBFactualReliabilityScore: { type: "integer" },
+    overallReason: { type: "string" },
+    sideAFeedback: { type: "string" },
+    sideBFeedback: { type: "string" },
+  },
+} as const;

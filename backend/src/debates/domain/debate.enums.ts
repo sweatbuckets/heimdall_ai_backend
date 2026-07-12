@@ -1,0 +1,59 @@
+export enum DebatePhase {
+  OPENING = "OPENING",
+  REBUTTAL_QUESTION = "REBUTTAL_QUESTION",
+  CLOSING = "CLOSING",
+}
+
+export enum DebateSide {
+  SIDE_A = "SIDE_A",
+  SIDE_B = "SIDE_B",
+}
+
+export enum DebateStatus {
+  READY = "READY",
+  IN_PROGRESS = "IN_PROGRESS",
+  FINAL_FACT_CHECKING = "FINAL_FACT_CHECKING",
+  JUDGING = "JUDGING",
+  COMPLETED = "COMPLETED",
+  FAILED = "FAILED",
+}
+
+export enum DebateTurnAnalysisStatus {
+  PENDING = "PENDING",
+  PROCESSING = "PROCESSING",
+  COMPLETED = "COMPLETED",
+  FAILED = "FAILED",
+}
+
+export enum ArgumentalRelationType {
+  SUPPORTS = "SUPPORTS",
+  ATTACKS = "ATTACKS",
+}
+
+export enum InteractionalRelationType {
+  QUESTIONS = "QUESTIONS",
+  ANSWERS = "ANSWERS",
+}
+
+export enum FactCheckBatchTaskStatus {
+  PENDING = "PENDING",
+  QUEUED = "QUEUED",
+  PROCESSING = "PROCESSING",
+  COMPLETED = "COMPLETED",
+  FAILED = "FAILED",
+}
+
+export enum VerificationStatus {
+  SUPPORTED = "SUPPORTED",
+  CONTRADICTED = "CONTRADICTED",
+  PARTIALLY_SUPPORTED = "PARTIALLY_SUPPORTED",
+  INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE",
+  NOT_VERIFIABLE = "NOT_VERIFIABLE",
+  OUTDATED_OR_TIME_SENSITIVE = "OUTDATED_OR_TIME_SENSITIVE",
+}
+
+export enum JudgmentWinner {
+  SIDE_A = "SIDE_A",
+  SIDE_B = "SIDE_B",
+  DRAW = "DRAW",
+}
