@@ -1,7 +1,12 @@
 import { Injectable } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
-import { ANALYZER_QUEUE, ANALYZE_TURN_JOB } from "../constants";
+import {
+  ANALYZER_QUEUE,
+  ANALYZE_TURN_JOB,
+  ANALYZE_TURN_JOB_ATTEMPTS,
+  ANALYZE_TURN_JOB_BACKOFF_DELAY_MS,
+} from "../constants";
 import { AnalyzeTurnJobData } from "./analyzer-job.data";
 
 @Injectable()
@@ -17,10 +22,10 @@ export class AnalyzerQueueService {
       { turnId },
       {
         jobId: `${ANALYZE_TURN_JOB}-${turnId}`,
-        attempts: 3,
+        attempts: ANALYZE_TURN_JOB_ATTEMPTS,
         backoff: {
           type: "exponential",
-          delay: 1000,
+          delay: ANALYZE_TURN_JOB_BACKOFF_DELAY_MS,
         },
       },
     );

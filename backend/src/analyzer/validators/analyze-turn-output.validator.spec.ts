@@ -142,23 +142,21 @@ describe("validateAnalyzeTurnOutput", () => {
     );
   });
 
-  it("rejects isolated non-major components", () => {
+  it("accepts isolated non-major components", () => {
     const output: AnalyzeTurnOutput = {
       newComponents: [
         {
           localKey: "NEW_1",
-          statement: "I am isolated.",
+          statement: "Attendance records can be inaccurate.",
           isMajorClaim: false,
-          requiresFactCheck: false,
+          requiresFactCheck: true,
         },
       ],
       newArgumentalRelations: [],
       newInteractionalRelations: [],
     };
 
-    expect(() => validateAnalyzeTurnOutput(input, output)).toThrow(
-      InvalidAnalyzeTurnOutputError,
-    );
+    expect(() => validateAnalyzeTurnOutput(input, output)).not.toThrow();
   });
 
   it("rejects conflicting interactional relations", () => {

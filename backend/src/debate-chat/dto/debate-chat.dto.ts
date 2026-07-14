@@ -4,9 +4,13 @@ export const DEBATE_TURN_SEND_COMMAND = "debate.turn.send";
 export const DEBATE_TURN_MESSAGE_SEND_COMMAND = "debate.turn.message.send";
 export const DEBATE_TURN_FINALIZE_COMMAND = "debate.turn.finalize";
 export const DEBATE_CONNECTION_RESTORED_EVENT = "connection.restored";
+export const DEBATE_TURN_MESSAGE_ACK_EVENT = "debate.turn.message.ack";
 export const DEBATE_TURN_MESSAGE_CREATED_EVENT = "debate.turn.message.created";
 export const DEBATE_TURN_FINALIZED_EVENT = "debate.turn.finalized";
 export const DEBATE_CHAT_ERROR_EVENT = "error";
+
+export const DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED = "APPENDED";
+export const DEBATE_TURN_MESSAGE_APPEND_STATUS_DUPLICATE = "DUPLICATE";
 
 export interface DebateTurnMessageSendCommand {
   id: string;
@@ -51,6 +55,15 @@ export interface DebateChatDraftMessageDto {
   createdAt: string;
 }
 
+export type DebateTurnMessageAppendStatus =
+  | typeof DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED
+  | typeof DEBATE_TURN_MESSAGE_APPEND_STATUS_DUPLICATE;
+
+export interface DebateTurnMessageAppendResult {
+  status: DebateTurnMessageAppendStatus;
+  message: DebateChatDraftMessageDto;
+}
+
 export interface DebateChatCurrentTurnDto {
   phase: DebatePhase;
   round: number;
@@ -89,6 +102,16 @@ export interface DebateTurnMessageCreatedEvent {
   message: DebateChatDraftMessageDto;
 }
 
+export interface DebateTurnMessageAckEvent {
+  id: string;
+  type: typeof DEBATE_TURN_MESSAGE_ACK_EVENT;
+  debateId: string;
+  commandId: string;
+  clientMessageId?: string;
+  status: DebateTurnMessageAppendStatus;
+  message: DebateChatDraftMessageDto;
+}
+
 export interface DebateTurnFinalizedEvent {
   id: string;
   type: typeof DEBATE_TURN_FINALIZED_EVENT;
@@ -107,6 +130,7 @@ export interface DebateChatErrorEvent {
 
 export type DebateChatServerEvent =
   | DebateConnectionRestoredEvent
+  | DebateTurnMessageAckEvent
   | DebateTurnMessageCreatedEvent
   | DebateTurnFinalizedEvent
   | DebateChatErrorEvent;

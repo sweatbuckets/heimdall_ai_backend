@@ -15,6 +15,9 @@ import {
   DebateChatCurrentTurnDto,
   DebateChatDraftMessageDto,
   DebateChatTurnDto,
+  DebateTurnMessageAppendResult,
+  DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED,
+  DEBATE_TURN_MESSAGE_APPEND_STATUS_DUPLICATE,
   DebateTurnFinalizeCommand,
   DebateTurnMessageSendCommand,
 } from "./dto/debate-chat.dto";
@@ -47,6 +50,65 @@ interface NextTurnState {
 const MAX_TURN_TOTAL_CONTENT_LENGTH = 1000;
 const TURN_TIME_LIMIT_MS = 2 * 60 * 1000;
 const TURN_TIME_LIMIT_SECONDS = TURN_TIME_LIMIT_MS / 1000;
+const APPEND_DRAFT_MESSAGE_SCRIPT = `
+local draftKey = KEYS[1]
+local draftCharCountKey = KEYS[2]
+local draftKeysKey = KEYS[3]
+local finalizeLockKey = KEYS[4]
+local draftDedupKey = KEYS[5]
+
+local messageJson = ARGV[1]
+local messageLength = tonumber(ARGV[2])
+local maxLength = tonumber(ARGV[3])
+local ttlSeconds = tonumber(ARGV[4])
+local clientMessageId = ARGV[5]
+
+local currentRaw = redis.call("GET", draftCharCountKey)
+local currentLength = 0
+
+if redis.call("EXISTS", finalizeLockKey) == 1 then
+  return {-3, 0}
+end
+
+if clientMessageId ~= "" then
+  local existingMessageJson = redis.call("HGET", draftDedupKey, clientMessageId)
+  if existingMessageJson then
+    return {2, existingMessageJson}
+  end
+end
+
+if currentRaw then
+  currentLength = tonumber(currentRaw)
+elseif redis.call("LLEN", draftKey) > 0 then
+  return {-2, 0}
+end
+
+if currentLength + messageLength > maxLength then
+  return {0, currentLength}
+end
+
+local nextLength = currentLength + messageLength
+
+redis.call("RPUSH", draftKey, messageJson)
+redis.call("SET", draftCharCountKey, nextLength, "EX", ttlSeconds)
+redis.call("EXPIRE", draftKey, ttlSeconds)
+redis.call("SADD", draftKeysKey, draftKey)
+redis.call("EXPIRE", draftKeysKey, ttlSeconds)
+
+if clientMessageId ~= "" then
+  redis.call("HSET", draftDedupKey, clientMessageId, messageJson)
+  redis.call("EXPIRE", draftDedupKey, ttlSeconds)
+end
+
+return {1, nextLength}
+`;
+const RELEASE_FINALIZE_LOCK_SCRIPT = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+
+return 0
+`;
 
 @Injectable()
 export class DebateChatService implements OnModuleDestroy {
@@ -84,7 +146,7 @@ export class DebateChatService implements OnModuleDestroy {
   async appendDraftMessage(
     debateId: string,
     command: DebateTurnMessageSendCommand,
-  ): Promise<DebateChatDraftMessageDto> {
+  ): Promise<DebateTurnMessageAppendResult> {
     validateCommandDebateId(debateId, command.debateId);
 
     const debate = await this.dataSource.getRepository(DebateEntity).findOne({
@@ -115,18 +177,26 @@ export class DebateChatService implements OnModuleDestroy {
     };
 
     const draftKey = buildDraftKey(message);
+    const draftCharCountKey = buildDraftCharCountKey(message);
     const draftKeysKey = buildDraftKeysKey(debateId);
-    await this.validateTurnTotalContentLength(draftKey, message.content);
+    const finalizeLockKey = buildFinalizeLockKey(message);
+    const draftDedupKey = buildDraftDedupKey(message);
+    const appendResult = await this.redis.eval(
+      APPEND_DRAFT_MESSAGE_SCRIPT,
+      5,
+      draftKey,
+      draftCharCountKey,
+      draftKeysKey,
+      finalizeLockKey,
+      draftDedupKey,
+      JSON.stringify(message),
+      String(message.content.length),
+      String(MAX_TURN_TOTAL_CONTENT_LENGTH),
+      String(DEBATE_CHAT_DRAFT_TTL_SECONDS),
+      message.clientMessageId ?? "",
+    );
 
-    await this.redis
-      .multi()
-      .rpush(draftKey, JSON.stringify(message))
-      .expire(draftKey, DEBATE_CHAT_DRAFT_TTL_SECONDS)
-      .sadd(draftKeysKey, draftKey)
-      .expire(draftKeysKey, DEBATE_CHAT_DRAFT_TTL_SECONDS)
-      .exec();
-
-    return message;
+    return parseDraftMessageAppendResult(appendResult, message);
   }
 
   async finalizeTurn(
@@ -143,6 +213,8 @@ export class DebateChatService implements OnModuleDestroy {
       round: command.payload.round,
     };
     const draftKey = buildDraftKey(scope);
+    const draftCharCountKey = buildDraftCharCountKey(scope);
+    const draftDedupKey = buildDraftDedupKey(scope);
     const lockKey = buildFinalizeLockKey(scope);
     const lockAcquired = await this.redis.set(
       lockKey,
@@ -221,13 +293,15 @@ export class DebateChatService implements OnModuleDestroy {
       await this.redis
         .multi()
         .del(draftKey)
+        .del(draftCharCountKey)
+        .del(draftDedupKey)
         .srem(buildDraftKeysKey(debateId), draftKey)
         .exec();
       await this.analyzerQueueService.enqueueAnalyzeTurn(finalizedTurn.id);
 
       return finalizedTurn;
     } finally {
-      await this.redis.del(lockKey);
+      await this.releaseFinalizeLock(lockKey, command.id);
     }
   }
 
@@ -258,20 +332,11 @@ export class DebateChatService implements OnModuleDestroy {
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  private async validateTurnTotalContentLength(
-    draftKey: string,
-    newContent: string,
+  private async releaseFinalizeLock(
+    lockKey: string,
+    lockOwner: string,
   ): Promise<void> {
-    const rawMessages = await this.redis.lrange(draftKey, 0, -1);
-    const currentLength = rawMessages
-      .map(parseDraftMessage)
-      .reduce((total, message) => total + message.content.length, 0);
-
-    if (currentLength + newContent.length > MAX_TURN_TOTAL_CONTENT_LENGTH) {
-      throw new DebateChatInputError(
-        `Turn total content exceeds maximum length: ${MAX_TURN_TOTAL_CONTENT_LENGTH}.`,
-      );
-    }
+    await this.redis.eval(RELEASE_FINALIZE_LOCK_SCRIPT, 1, lockKey, lockOwner);
   }
 }
 
@@ -490,6 +555,28 @@ function buildDraftKey(scope: DebateDraftScope): string {
   ].join(":");
 }
 
+function buildDraftCharCountKey(scope: DebateDraftScope): string {
+  return [
+    "debate-chat:draft-char-count",
+    scope.debateId,
+    scope.speakerId,
+    scope.speakerSide,
+    scope.phase,
+    String(scope.round),
+  ].join(":");
+}
+
+function buildDraftDedupKey(scope: DebateDraftScope): string {
+  return [
+    "debate-chat:draft-dedup",
+    scope.debateId,
+    scope.speakerId,
+    scope.speakerSide,
+    scope.phase,
+    String(scope.round),
+  ].join(":");
+}
+
 function buildFinalizeLockKey(scope: DebateDraftScope): string {
   return [
     "debate-chat:finalize-lock",
@@ -499,6 +586,55 @@ function buildFinalizeLockKey(scope: DebateDraftScope): string {
     scope.phase,
     String(scope.round),
   ].join(":");
+}
+
+function parseDraftMessageAppendResult(
+  result: unknown,
+  message: DebateChatDraftMessageDto,
+): DebateTurnMessageAppendResult {
+  if (!Array.isArray(result) || result.length < 1) {
+    throw new DebateChatStateError("Redis append result is invalid.");
+  }
+
+  const status = Number(result[0]);
+
+  if (status === 1) {
+    return {
+      status: DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED,
+      message,
+    };
+  }
+
+  if (status === 2) {
+    if (typeof result[1] !== "string") {
+      throw new DebateChatStateError(
+        "Redis duplicate append result is invalid.",
+      );
+    }
+
+    return {
+      status: DEBATE_TURN_MESSAGE_APPEND_STATUS_DUPLICATE,
+      message: parseDraftMessage(result[1]),
+    };
+  }
+
+  if (status === 0) {
+    throw new DebateChatInputError(
+      `Turn total content exceeds maximum length: ${MAX_TURN_TOTAL_CONTENT_LENGTH}.`,
+    );
+  }
+
+  if (status === -2) {
+    throw new DebateChatStateError(
+      "Draft character count is missing for existing draft messages.",
+    );
+  }
+
+  if (status === -3) {
+    throw new DebateChatStateError("Turn finalization is already processing.");
+  }
+
+  throw new DebateChatStateError("Redis append result is invalid.");
 }
 
 function parseDraftMessage(rawMessage: string): DebateChatDraftMessageDto {

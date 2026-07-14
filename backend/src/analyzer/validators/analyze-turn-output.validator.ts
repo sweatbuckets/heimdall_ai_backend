@@ -47,7 +47,6 @@ export function validateAnalyzeTurnOutput(
   validateConflictingInteractionalRelations(output);
   validateStatements(output, limits);
   validateMajorClaims(input, output);
-  validateComponentConnectivity(output);
 }
 
 function validateOutputShape(output: AnalyzeTurnOutput): void {
@@ -283,30 +282,6 @@ function validateMajorClaims(
     throw new InvalidAnalyzeTurnOutputError(
       "A speaker can have at most one Major Claim in a debate.",
     );
-  }
-}
-
-function validateComponentConnectivity(output: AnalyzeTurnOutput): void {
-  const participatingRefs = new Set<string>();
-
-  for (const relation of [
-    ...output.newArgumentalRelations,
-    ...output.newInteractionalRelations,
-  ]) {
-    participatingRefs.add(normalizeComponentRef(relation.from));
-    participatingRefs.add(normalizeComponentRef(relation.to));
-  }
-
-  for (const component of output.newComponents) {
-    if (component.isMajorClaim) {
-      continue;
-    }
-
-    if (!participatingRefs.has(`NEW:${component.localKey}`)) {
-      throw new InvalidAnalyzeTurnOutputError(
-        `Non-major component is isolated: ${component.localKey}.`,
-      );
-    }
   }
 }
 

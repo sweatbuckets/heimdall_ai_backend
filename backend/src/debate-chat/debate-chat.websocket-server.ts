@@ -13,6 +13,8 @@ import {
   DEBATE_CONNECTION_RESTORED_EVENT,
   DEBATE_TURN_FINALIZE_COMMAND,
   DEBATE_TURN_FINALIZED_EVENT,
+  DEBATE_TURN_MESSAGE_ACK_EVENT,
+  DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED,
   DEBATE_TURN_MESSAGE_CREATED_EVENT,
   DEBATE_TURN_MESSAGE_SEND_COMMAND,
   DEBATE_TURN_SEND_COMMAND,
@@ -111,16 +113,32 @@ export class DebateChatWebSocketServer
         command.type === DEBATE_TURN_SEND_COMMAND ||
         command.type === DEBATE_TURN_MESSAGE_SEND_COMMAND
       ) {
-        const message = await this.debateChatService.appendDraftMessage(
+        const result = await this.debateChatService.appendDraftMessage(
           debateId,
           command,
         );
 
-        this.broadcast(debateId, {
+        sendEvent(socket, {
+          id: randomUUID(),
+          type: DEBATE_TURN_MESSAGE_ACK_EVENT,
+          debateId,
+          commandId: command.id,
+          ...(command.clientMessageId
+            ? { clientMessageId: command.clientMessageId }
+            : {}),
+          status: result.status,
+          message: result.message,
+        });
+
+        if (result.status !== DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED) {
+          return;
+        }
+
+        this.broadcastExcept(debateId, socket, {
           id: randomUUID(),
           type: DEBATE_TURN_MESSAGE_CREATED_EVENT,
           debateId,
-          message,
+          message: result.message,
         });
         return;
       }
@@ -151,6 +169,26 @@ export class DebateChatWebSocketServer
     }
 
     for (const socket of room) {
+      sendEvent(socket, event);
+    }
+  }
+
+  private broadcastExcept(
+    debateId: string,
+    excludedSocket: WebSocket,
+    event: DebateChatServerEvent,
+  ): void {
+    const room = this.rooms.get(debateId);
+
+    if (!room) {
+      return;
+    }
+
+    for (const socket of room) {
+      if (socket === excludedSocket) {
+        continue;
+      }
+
       sendEvent(socket, event);
     }
   }

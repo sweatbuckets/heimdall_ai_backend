@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectQueue } from "@nestjs/bullmq";
-import { Queue } from "bullmq";
+import { Job, Queue } from "bullmq";
 import { DataSource } from "typeorm";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
@@ -33,6 +33,7 @@ import {
   FACT_CHECK_QUEUE,
   FactCheckJobData,
 } from "../fact-check/queues/fact-check.constants";
+import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
 
 export interface AnalyzeTurnResult {
   turnId: string;
@@ -54,7 +55,10 @@ export class AnalyzeTurnService {
     private readonly factCheckQueue: Queue<FactCheckJobData>,
   ) {}
 
-  async analyzeTurn(turnId: string): Promise<AnalyzeTurnResult> {
+  async analyzeTurn(
+    turnId: string,
+    job?: Job<AnalyzeTurnJobData>,
+  ): Promise<AnalyzeTurnResult> {
     const claimed = await this.claimTurnForAnalysis(turnId);
 
     if (!claimed) {
@@ -137,7 +141,7 @@ export class AnalyzeTurnService {
         skipped: false,
       };
     } catch (error) {
-      await this.markTurnAnalysisFailed(turnId);
+      await this.releaseOrFailTurnAnalysis(turnId, job);
       throw error;
     }
   }
@@ -213,16 +217,34 @@ export class AnalyzeTurnService {
     };
   }
 
-  private async markTurnAnalysisFailed(turnId: string): Promise<void> {
+  private async releaseOrFailTurnAnalysis(
+    turnId: string,
+    job: Job<AnalyzeTurnJobData> | undefined,
+  ): Promise<void> {
+    const nextStatus = this.isFinalAttempt(job)
+      ? DebateTurnAnalysisStatus.FAILED
+      : DebateTurnAnalysisStatus.PENDING;
+
     await this.dataSource
       .createQueryBuilder()
       .update(DebateTurnEntity)
-      .set({ analysisStatus: DebateTurnAnalysisStatus.FAILED })
+      .set({ analysisStatus: nextStatus })
       .where("id = :turnId", { turnId })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PROCESSING,
       })
       .execute();
+  }
+
+  private isFinalAttempt(job: Job<AnalyzeTurnJobData> | undefined): boolean {
+    if (!job) {
+      return true;
+    }
+
+    const attempts =
+      typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
+
+    return job.attemptsMade + 1 >= attempts;
   }
 
   private async enqueueFactCheckBatch(
