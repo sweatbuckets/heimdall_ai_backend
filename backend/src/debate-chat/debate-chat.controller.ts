@@ -15,6 +15,7 @@ import {
   DebateChatDraftMessageDto,
   DebateChatCurrentTurnDto,
   DebateChatTurnDto,
+  DebateTurnMessageAppendResult,
   DebateTurnFinalizeCommand,
   DebateTurnMessageSendCommand,
 } from "./dto/debate-chat.dto";
@@ -48,7 +49,7 @@ export class DebateChatController {
   async appendDraftMessage(
     @Param("debateId") debateId: string,
     @Body() body: unknown,
-  ): Promise<DebateChatDraftMessageDto> {
+  ): Promise<DebateTurnMessageAppendResult> {
     assertUuid(debateId, "debateId");
 
     try {

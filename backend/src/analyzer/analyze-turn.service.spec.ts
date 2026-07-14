@@ -1,11 +1,12 @@
 import { ConfigService } from "@nestjs/config";
-import { Queue } from "bullmq";
+import { Job, Queue } from "bullmq";
 import { DataSource } from "typeorm";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import { AnalyzeTurnService } from "./analyze-turn.service";
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
 import { AnalyzeTurnConflictError } from "./errors/analyzer.errors";
+import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
 import {
   DebatePhase,
   DebateSide,
@@ -81,6 +82,7 @@ class MockRepository<T extends object> {
 }
 
 class MockDataSource {
+  public readonly allRootQueryBuilders: MockUpdateQueryBuilder[];
   public readonly rootQueryBuilders: MockUpdateQueryBuilder[];
   public readonly manager: MockEntityManager;
 
@@ -91,9 +93,10 @@ class MockDataSource {
     private readonly factCheckTask: Partial<FactCheckBatchTaskEntity> | null = null,
     completionAffected = 1,
   ) {
-    this.rootQueryBuilders = rootAffectedResults.map(
+    this.allRootQueryBuilders = rootAffectedResults.map(
       (affected) => new MockUpdateQueryBuilder(affected),
     );
+    this.rootQueryBuilders = [...this.allRootQueryBuilders];
     this.manager = new MockEntityManager(completionAffected);
   }
 
@@ -201,6 +204,16 @@ describe("AnalyzeTurnService", () => {
     };
   }
 
+  function createJob(
+    attemptsMade: number,
+    attempts: number,
+  ): Job<AnalyzeTurnJobData> {
+    return {
+      attemptsMade,
+      opts: { attempts },
+    } as Job<AnalyzeTurnJobData>;
+  }
+
   it("claims a PENDING turn and completes empty analyzer output in one transaction", async () => {
     const dataSource = new MockDataSource([1]);
     const { service, assembler, aiService } = createService(dataSource);
@@ -260,6 +273,34 @@ describe("AnalyzeTurnService", () => {
       interactionalRelationCount: 0,
       factCheckBatchTaskId: null,
       skipped: true,
+    });
+  });
+
+  it("resets PROCESSING turn to PENDING when analyzer fails before final attempt", async () => {
+    const dataSource = new MockDataSource([1, 1]);
+    const { service, aiService } = createService(dataSource);
+    aiService.analyze.mockRejectedValue(new Error("temporary analyzer error"));
+
+    await expect(service.analyzeTurn(turnId, createJob(0, 3))).rejects.toThrow(
+      "temporary analyzer error",
+    );
+
+    expect(dataSource.allRootQueryBuilders[1].sets).toContainEqual({
+      analysisStatus: DebateTurnAnalysisStatus.PENDING,
+    });
+  });
+
+  it("marks PROCESSING turn as FAILED when analyzer fails on final attempt", async () => {
+    const dataSource = new MockDataSource([1, 1]);
+    const { service, aiService } = createService(dataSource);
+    aiService.analyze.mockRejectedValue(new Error("final analyzer error"));
+
+    await expect(service.analyzeTurn(turnId, createJob(2, 3))).rejects.toThrow(
+      "final analyzer error",
+    );
+
+    expect(dataSource.allRootQueryBuilders[1].sets).toContainEqual({
+      analysisStatus: DebateTurnAnalysisStatus.FAILED,
     });
   });
 });

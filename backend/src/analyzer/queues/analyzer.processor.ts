@@ -19,7 +19,7 @@ export class AnalyzerProcessor extends WorkerHost {
     }
 
     try {
-      await this.analyzeTurnService.analyzeTurn(job.data.turnId);
+      await this.analyzeTurnService.analyzeTurn(job.data.turnId, job);
     } catch (error) {
       this.logger.error(
         `Analyze turn job failed. jobId=${String(job.id)} turnId=${job.data.turnId}`,

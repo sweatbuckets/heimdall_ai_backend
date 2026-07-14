@@ -1,5 +1,7 @@
 export const ANALYZER_QUEUE = "analyzer";
 export const ANALYZE_TURN_JOB = "analyze-turn";
+export const ANALYZE_TURN_JOB_ATTEMPTS = 3;
+export const ANALYZE_TURN_JOB_BACKOFF_DELAY_MS = 1000;
 
 export const DEFAULT_MAX_COMPONENTS_PER_TURN = 10;
 export const DEFAULT_MAX_FACT_CHECK_TARGETS_PER_TURN = 5;
