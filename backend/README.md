@@ -100,17 +100,17 @@ flowchart TD
 
 ### Fact Checker
 
-검증 대상 주장을 검색 근거와 연결해 저장 가능한 `FactCheckResult`로 정규화하는 단계입니다.
+Grounding 기반 출처 탐색과 사실 판정 결과 생성을 분리하고, 판정 결과와 출처 간 참조 무결성을 보장하는 팩트체크 파이프라인입니다.
 
 - `requiresFactCheck=true`인 component를 Turn 단위 `FactCheckBatchTask`로 묶어 처리합니다.
 
 **AI Prompt 핵심**
 
-- 1차 Gemini 호출은 Google Search Grounding을 사용해 각 target의 근거를 독립적으로 수집합니다.
-- 공식 통계, 공공기관, 학술 자료, 원문 문서, 신뢰 가능한 원보도를 우선하도록 지시합니다.
-- 근거가 부족하거나 최신성이 중요한 주장은 억지로 확정 판정하지 않도록 지시합니다.
-- 2차 Gemini 호출은 구조화된 JSON 결과만 생성하며, 모든 input target에 정확히 하나의 result를 반환하도록 제한합니다.
-- URL 직접 생성을 금지하고, 서버가 제공한 `sourceIndex`만 참조하도록 지시합니다.
+- Grounding 프롬프트는 각 target을 독립적으로 검토하고, 공식 통계/공공기관/학술 자료/원문 문서/신뢰 가능한 원보도를 우선 탐색하도록 지시합니다.
+- Grounding 단계는 판정 JSON을 만들지 않고, 근거 텍스트와 Gemini `groundingMetadata` 기반 출처 후보 수집에 집중합니다.
+- 서버가 출처 URL 검증, 중복 제거, `sourceIndex` 부여를 끝낸 뒤에만 Synthesis 프롬프트에 허용 출처 목록을 전달합니다.
+- Synthesis 프롬프트는 모든 input target에 정확히 하나의 result를 반환하고, URL 직접 생성 없이 허용된 `sourceIndex`만 참조하도록 제한합니다.
+- 근거가 부족하거나 검증 불가능하거나 최신성이 중요한 주장은 무리하게 확정하지 않고 검증 불가 계열 status로 분류하도록 지시합니다.
 
 **Backend 검증 규칙**
 
