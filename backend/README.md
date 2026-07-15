@@ -38,13 +38,36 @@ flowchart TD
 
 ![AI Analysis Pipeline](./readme_img/ai-pipeline.png)
 
-확정된 토론 턴은 Analyzer, Fact Checker, Judge를 순차적으로 거칩니다. 각 단계의 Gemini 응답은 프롬프트와 `responseSchema`로 형태를 제한하고, 저장 전 백엔드 Validator로 다시 검증합니다.
+채팅 메시지는 Redis Draft Buffer에서 턴 단위 발언으로 확정되고, 확정된 `DebateTurn`은 Analyzer, Fact Checker, Judge를 순차적으로 거칩니다. 각 단계의 Gemini 응답은 프롬프트와 `responseSchema`로 형태를 제한하고, 저장 전 백엔드 Validator로 다시 검증합니다.
+
+### Chatting
+
+실시간 채팅 UX와 턴 단위 DB 저장/AI 분석 경계를 분리하는 단계입니다.
+
+**Message Append**
+
+- WebSocket `message.send`는 DB에 바로 저장하지 않고 Redis Draft Buffer에 append합니다.
+- Redis Lua Script 하나로 finalize lock 확인, `clientMessageId` dedup 확인, 누적 글자 수 검증, `RPUSH`, counter 갱신, TTL 갱신을 처리합니다.
+- append 검증과 저장을 Redis 내부에서 원자화해 동시 append 상황에서도 턴당 1000자 제한 초과를 방지합니다.
+- WebSocket 위에 `clientMessageId` 기반 ACK 프로토콜을 설계해 전송자 ACK와 상대방 broadcast를 분리하고, 재전송 중복 전파를 막습니다.
+
+**DebateTurn Finalize**
+
+- `turn.finalize`는 Redis Draft 메시지를 읽어 하나의 `DebateTurn.content`로 병합하고 DB transaction으로 확정 저장합니다.
+- Redis `SET NX EX` 기반 finalize lock으로 확정 중 append가 끼어드는 상황을 차단합니다.
+- lock 해제 시 owner token을 비교해, 다른 요청이 잡은 lock을 잘못 삭제하지 않도록 방어합니다.
+- 확정된 `DebateTurn`만 Analyzer Queue에 등록해 AI 파이프라인 입력 단위를 턴 기준으로 고정합니다.
+- 토론 진행 단계를 서버 주도 상태 머신으로 모델링하고, 턴 소유자, phase, round, 시간 제한과 다음 턴 상태 전이를 서버 기준으로 제어합니다.
+
+![Debate Chat Flow](./readme_img/debate-chat-flow.png)
+
+![Eval Append Lua Script](./readme_img/eval-append-lua-script.png)
+
+![Debate State Machine](./readme_img/debate-state-machine.png)
 
 ### Analyzer
 
 확정된 `DebateTurn`을 논증 요소와 관계로 구조화하는 단계입니다.
-
-Analyzer 입력은 메시지 단위가 아니라 finalize된 턴입니다. Redis Draft Buffer에 확정 전 메시지를 append 방식으로 모으고, Redis Lua Script와 `SET NX EX` 기반 Lock으로 글자 수 제한, 중복 전송, finalize 중 append를 제어합니다.
 
 **AI Prompt 핵심**
 
@@ -62,10 +85,6 @@ Analyzer 입력은 메시지 단위가 아니라 finalize된 턴입니다. Redis
 - statement 공백/길이, component 개수, fact-check target 개수 제한을 검증합니다.
 - Mapper는 검증된 `localKey`를 UUID로 치환하고, component/relation/fact-check target 생성과 `analysisStatus=COMPLETED` 전환을 하나의 transaction으로 저장합니다.
 - BullMQ Worker는 `PENDING -> PROCESSING -> COMPLETED/FAILED` 상태 전이를 사용하며, 재시도 가능한 실패는 다시 `PENDING`으로 되돌려 중복 실행과 조기 실패를 방지합니다.
-
-![Debate Chat Flow](./readme_img/debate-chat-flow.png)
-
-![Debate State Machine](./readme_img/debate-state-machine.png)
 
 ![AI Worker State](./readme_img/ai-worker-state.png)
 
