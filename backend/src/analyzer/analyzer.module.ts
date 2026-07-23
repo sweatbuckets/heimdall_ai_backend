@@ -7,6 +7,7 @@ import { FACT_CHECK_QUEUE } from "../fact-check/queues/fact-check.constants";
 import { ANALYZER_QUEUE } from "./constants";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
+import { AnalyzerRecoveryScheduler } from "./analyzer-recovery.scheduler";
 import { AnalyzerQueueService } from "./queues/analyzer-queue.service";
 import { AnalyzerProcessor } from "./queues/analyzer.processor";
 import { AnalyzeTurnService } from "./analyze-turn.service";
@@ -30,6 +31,7 @@ import { AnalyzeTurnService } from "./analyze-turn.service";
     AnalyzerAiService,
     AnalyzerQueueService,
     AnalyzerProcessor,
+    AnalyzerRecoveryScheduler,
   ],
   exports: [AnalyzeTurnService, AnalyzerQueueService],
 })

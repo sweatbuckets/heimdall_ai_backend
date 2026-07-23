@@ -24,6 +24,10 @@ import { FactCheckBatchTaskEntity } from "./fact-check-batch-task.entity";
 @Index("idx_debate_turn_debate_id", ["debateId"])
 @Index("idx_debate_turn_speaker_id", ["speakerId"])
 @Index("idx_debate_turn_analysis_status", ["analysisStatus"])
+@Index("idx_debate_turn_analysis_recovery", [
+  "analysisStatus",
+  "analysisProcessingStartedAt",
+])
 export class DebateTurnEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -62,6 +66,13 @@ export class DebateTurnEntity {
     default: DebateTurnAnalysisStatus.PENDING,
   })
   analysisStatus: DebateTurnAnalysisStatus;
+
+  @Column({
+    name: "analysis_processing_started_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  analysisProcessingStartedAt: Date | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

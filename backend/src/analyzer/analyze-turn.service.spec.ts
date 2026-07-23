@@ -225,6 +225,11 @@ describe("AnalyzeTurnService", () => {
     expect(dataSource.manager.inserts).toHaveLength(0);
     expect(dataSource.manager.completionQueryBuilder.sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
+      analysisProcessingStartedAt: null,
+    });
+    expect(dataSource.allRootQueryBuilders[0].sets[0]).toEqual({
+      analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
+      analysisProcessingStartedAt: expect.any(Date),
     });
     expect(result).toEqual({
       turnId,
@@ -287,6 +292,7 @@ describe("AnalyzeTurnService", () => {
 
     expect(dataSource.allRootQueryBuilders[1].sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.PENDING,
+      analysisProcessingStartedAt: null,
     });
   });
 
@@ -301,6 +307,7 @@ describe("AnalyzeTurnService", () => {
 
     expect(dataSource.allRootQueryBuilders[1].sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.FAILED,
+      analysisProcessingStartedAt: null,
     });
   });
 });

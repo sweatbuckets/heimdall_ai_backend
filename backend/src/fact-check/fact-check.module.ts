@@ -6,6 +6,7 @@ import { debateEntities } from "../database/typeorm.config";
 import { FactCheckBatchTaskService } from "./fact-check-batch-task.service";
 import { FactCheckInputAssembler } from "./fact-check-input.assembler";
 import { FactCheckerAiService } from "./fact-checker-ai.service";
+import { FactCheckRecoveryScheduler } from "./fact-check-recovery.scheduler";
 import { FACT_CHECK_QUEUE } from "./queues/fact-check.constants";
 import { FactCheckProcessor } from "./queues/fact-check.processor";
 
@@ -22,6 +23,7 @@ import { FactCheckProcessor } from "./queues/fact-check.processor";
     FactCheckInputAssembler,
     FactCheckerAiService,
     FactCheckProcessor,
+    FactCheckRecoveryScheduler,
   ],
   exports: [FactCheckBatchTaskService],
 })

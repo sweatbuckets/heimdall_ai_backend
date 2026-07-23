@@ -114,7 +114,10 @@ export class AnalyzeTurnService {
         const completeResult = await manager
           .createQueryBuilder()
           .update(DebateTurnEntity)
-          .set({ analysisStatus: DebateTurnAnalysisStatus.COMPLETED })
+          .set({
+            analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
+            analysisProcessingStartedAt: null,
+          })
           .where("id = :turnId", { turnId })
           .andWhere("analysis_status = :status", {
             status: DebateTurnAnalysisStatus.PROCESSING,
@@ -150,7 +153,10 @@ export class AnalyzeTurnService {
     const result = await this.dataSource
       .createQueryBuilder()
       .update(DebateTurnEntity)
-      .set({ analysisStatus: DebateTurnAnalysisStatus.PROCESSING })
+      .set({
+        analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
+        analysisProcessingStartedAt: new Date(),
+      })
       .where("id = :turnId", { turnId })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PENDING,
@@ -228,7 +234,10 @@ export class AnalyzeTurnService {
     await this.dataSource
       .createQueryBuilder()
       .update(DebateTurnEntity)
-      .set({ analysisStatus: nextStatus })
+      .set({
+        analysisStatus: nextStatus,
+        analysisProcessingStartedAt: null,
+      })
       .where("id = :turnId", { turnId })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PROCESSING,

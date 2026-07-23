@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectQueue } from "@nestjs/bullmq";
@@ -272,7 +273,7 @@ export class FactCheckBatchTaskService {
       FACT_CHECK_BATCH_JOB,
       { factCheckBatchTaskId },
       {
-        jobId: factCheckBatchTaskId,
+        jobId: `${factCheckBatchTaskId}-recovery-${randomUUID()}`,
         attempts: FACT_CHECK_JOB_ATTEMPTS,
         backoff: {
           type: "exponential",

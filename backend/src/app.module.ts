@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { BullModule } from "@nestjs/bullmq";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { ScheduleModule } from "@nestjs/schedule";
 import { DebatesModule } from "./debates/debates.module";
 import { envValidationSchema } from "./config/env.validation";
 import { createTypeOrmOptions } from "./database/typeorm.config";
@@ -20,6 +21,7 @@ import { MembersModule } from "./members/members.module";
     TypeOrmModule.forRootAsync({
       useFactory: createTypeOrmOptions,
     }),
+    ScheduleModule.forRoot(),
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
