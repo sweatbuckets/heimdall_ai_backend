@@ -15,6 +15,7 @@ import {
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
 import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
+import { JudgeReadinessService } from "../judge/judge-readiness.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -198,6 +199,9 @@ describe("AnalyzeTurnService", () => {
         aiService as unknown as AnalyzerAiService,
         new MockConfigService() as unknown as ConfigService,
         queue as unknown as Queue,
+        {
+          tryStartJudge: jest.fn().mockResolvedValue(undefined),
+        } as unknown as JudgeReadinessService,
       ),
       assembler,
       aiService,
@@ -225,6 +229,11 @@ describe("AnalyzeTurnService", () => {
     expect(dataSource.manager.inserts).toHaveLength(0);
     expect(dataSource.manager.completionQueryBuilder.sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
+      analysisProcessingStartedAt: null,
+    });
+    expect(dataSource.allRootQueryBuilders[0].sets[0]).toEqual({
+      analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
+      analysisProcessingStartedAt: expect.any(Date),
     });
     expect(result).toEqual({
       turnId,
@@ -287,6 +296,7 @@ describe("AnalyzeTurnService", () => {
 
     expect(dataSource.allRootQueryBuilders[1].sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.PENDING,
+      analysisProcessingStartedAt: null,
     });
   });
 
@@ -301,6 +311,7 @@ describe("AnalyzeTurnService", () => {
 
     expect(dataSource.allRootQueryBuilders[1].sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.FAILED,
+      analysisProcessingStartedAt: null,
     });
   });
 });

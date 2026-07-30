@@ -5,12 +5,18 @@ import { debateEntities } from "../database/typeorm.config";
 import { JudgeAiService } from "./judge-ai.service";
 import { JudgeController } from "./judge.controller";
 import { JudgeInputAssembler } from "./judge-input.assembler";
+import { JudgeReadinessService } from "./judge-readiness.service";
 import { JudgeService } from "./judge.service";
 
 @Module({
   imports: [TypeOrmModule.forFeature([...debateEntities]), GeminiModule],
   controllers: [JudgeController],
-  providers: [JudgeService, JudgeInputAssembler, JudgeAiService],
-  exports: [JudgeService],
+  providers: [
+    JudgeService,
+    JudgeReadinessService,
+    JudgeInputAssembler,
+    JudgeAiService,
+  ],
+  exports: [JudgeService, JudgeReadinessService],
 })
 export class JudgeModule {}

@@ -4,9 +4,11 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { GeminiModule } from "../ai/gemini/gemini.module";
 import { debateEntities } from "../database/typeorm.config";
 import { FACT_CHECK_QUEUE } from "../fact-check/queues/fact-check.constants";
+import { JudgeModule } from "../judge/judge.module";
 import { ANALYZER_QUEUE } from "./constants";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
+import { AnalyzerRecoveryScheduler } from "./analyzer-recovery.scheduler";
 import { AnalyzerQueueService } from "./queues/analyzer-queue.service";
 import { AnalyzerProcessor } from "./queues/analyzer.processor";
 import { AnalyzeTurnService } from "./analyze-turn.service";
@@ -23,6 +25,7 @@ import { AnalyzeTurnService } from "./analyze-turn.service";
       },
     ),
     GeminiModule,
+    JudgeModule,
   ],
   providers: [
     AnalyzeTurnService,
@@ -30,6 +33,7 @@ import { AnalyzeTurnService } from "./analyze-turn.service";
     AnalyzerAiService,
     AnalyzerQueueService,
     AnalyzerProcessor,
+    AnalyzerRecoveryScheduler,
   ],
   exports: [AnalyzeTurnService, AnalyzerQueueService],
 })

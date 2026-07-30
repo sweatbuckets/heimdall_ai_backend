@@ -20,7 +20,9 @@ export const envValidationSchema = Joi.object({
   GEMINI_FACT_CHECKER_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_JUDGE_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_REQUEST_TIMEOUT_MS: Joi.number().integer().min(1000).default(60000),
-  GEMINI_MAX_RETRIES: Joi.number().integer().min(0).default(3),
+  GEMINI_ANALYZER_MAX_RETRIES: Joi.number().integer().min(0).default(1),
+  GEMINI_FACT_CHECKER_MAX_RETRIES: Joi.number().integer().min(0).default(1),
+  GEMINI_JUDGE_MAX_RETRIES: Joi.number().integer().min(0).default(3),
 
   ANALYZER_MAX_COMPONENTS_PER_TURN: Joi.number().integer().min(1).default(10),
   ANALYZER_MAX_FACT_CHECK_TARGETS_PER_TURN: Joi.number()
@@ -31,12 +33,29 @@ export const envValidationSchema = Joi.object({
     .integer()
     .min(1)
     .default(1000),
+  ANALYZER_RECOVERY_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .default(60000),
+  ANALYZER_PROCESSING_STALE_MS: Joi.number()
+    .integer()
+    .min(60000)
+    .default(600000),
 
   FACT_CHECK_MAX_TARGETS_PER_BATCH: Joi.number().integer().min(1).default(5),
   FACT_CHECK_MAX_REASON_LENGTH: Joi.number().integer().min(1).default(2000),
   FACT_CHECK_MAX_SOURCES_PER_RESULT: Joi.number().integer().min(1).default(5),
   FACT_CHECK_ENABLED: Joi.boolean().truthy("true").falsy("false").default(true),
+  FACT_CHECK_RECOVERY_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .default(60000),
+  FACT_CHECK_PROCESSING_STALE_MS: Joi.number()
+    .integer()
+    .min(60000)
+    .default(600000),
 
   JUDGE_MAX_OVERALL_REASON_LENGTH: Joi.number().integer().min(1).default(3000),
   JUDGE_MAX_FEEDBACK_LENGTH: Joi.number().integer().min(1).default(1500),
+  JUDGE_PROCESSING_STALE_MS: Joi.number().integer().min(300000).default(300000),
 });

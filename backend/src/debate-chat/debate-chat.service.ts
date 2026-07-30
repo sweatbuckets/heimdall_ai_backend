@@ -40,7 +40,7 @@ interface DebateDraftScope {
 }
 
 interface NextTurnState {
-  status: DebateStatus.IN_PROGRESS | DebateStatus.FINAL_FACT_CHECKING;
+  status: DebateStatus.IN_PROGRESS | DebateStatus.DEBATE_FINALIZED;
   currentPhase: DebatePhase | null;
   currentRound: number | null;
   currentTurnSide: DebateSide | null;
@@ -529,7 +529,7 @@ function calculateNextTurnState(
     }
 
     return {
-      status: DebateStatus.FINAL_FACT_CHECKING,
+      status: DebateStatus.DEBATE_FINALIZED,
       currentPhase: null,
       currentRound: null,
       currentTurnSide: null,

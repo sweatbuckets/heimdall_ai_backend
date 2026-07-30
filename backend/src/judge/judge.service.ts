@@ -61,6 +61,7 @@ export class JudgeService {
         .set({
           status: DebateStatus.COMPLETED,
           endedAt: new Date(),
+          judgingStartedAt: null,
         })
         .where("id = :debateId", { debateId })
         .andWhere("status = :status", { status: DebateStatus.JUDGING })

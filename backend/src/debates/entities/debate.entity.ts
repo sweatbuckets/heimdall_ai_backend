@@ -16,6 +16,7 @@ import { MemberEntity } from "../../members/entities/member.entity";
 
 @Entity("debate")
 @Index("idx_debate_status", ["status"])
+@Index("idx_debate_judging_recovery", ["status", "judgingStartedAt"])
 @Index("idx_debate_current_turn", [
   "status",
   "currentPhase",
@@ -82,6 +83,13 @@ export class DebateEntity {
 
   @Column({ name: "ended_at", type: "timestamptz", nullable: true })
   endedAt: Date | null;
+
+  @Column({
+    name: "judging_started_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  judgingStartedAt: Date | null;
 
   @OneToMany(() => DebateTurnEntity, (turn) => turn.debate)
   turns: DebateTurnEntity[];

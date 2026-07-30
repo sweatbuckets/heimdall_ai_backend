@@ -6,6 +6,7 @@ import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-t
 import { FactCheckerAiService } from "./fact-checker-ai.service";
 import { FactCheckInputAssembler } from "./fact-check-input.assembler";
 import { FactCheckBatchTaskService } from "./fact-check-batch-task.service";
+import { JudgeReadinessService } from "../judge/judge-readiness.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -105,6 +106,9 @@ describe("FactCheckBatchTaskService", () => {
         aiService as unknown as FactCheckerAiService,
         new MockConfigService() as unknown as ConfigService,
         queue as unknown as Queue,
+        {
+          tryStartJudge: jest.fn().mockResolvedValue(undefined),
+        } as unknown as JudgeReadinessService,
       ),
       assembler,
       aiService,

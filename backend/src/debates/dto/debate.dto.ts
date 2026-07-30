@@ -23,6 +23,7 @@ export interface DebateDto {
   createdAt: string;
   startedAt: string | null;
   endedAt: string | null;
+  judgingStartedAt: string | null;
 }
 
 export interface DebateDetailDto extends DebateDto {
