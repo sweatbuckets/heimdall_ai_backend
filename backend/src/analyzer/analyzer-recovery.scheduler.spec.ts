@@ -19,12 +19,14 @@ describe("AnalyzerRecoveryScheduler", () => {
   const staleStartedAt = new Date("2026-07-21T00:00:00.000Z");
   const find = jest.fn();
   const enqueueRecoveredAnalyzeTurn = jest.fn();
+  const enqueuePendingAnalyzeTurn = jest.fn();
   const addInterval = jest.fn();
 
   beforeEach(() => {
     jest.clearAllMocks();
     find.mockResolvedValue([]);
     enqueueRecoveredAnalyzeTurn.mockResolvedValue("recovery-job-id");
+    enqueuePendingAnalyzeTurn.mockResolvedValue("pending-job-id");
   });
 
   it("registers the analyzer recovery interval", () => {
@@ -32,7 +34,10 @@ describe("AnalyzerRecoveryScheduler", () => {
       {
         getRepository: jest.fn().mockReturnValue({ find }),
       } as unknown as DataSource,
-      { enqueueRecoveredAnalyzeTurn } as unknown as AnalyzerQueueService,
+      {
+        enqueueRecoveredAnalyzeTurn,
+        enqueuePendingAnalyzeTurn,
+      } as unknown as AnalyzerQueueService,
       new ConfigService({ ANALYZER_RECOVERY_INTERVAL_MS: 30_000 }),
       { addInterval } as unknown as SchedulerRegistry,
     );
@@ -47,7 +52,7 @@ describe("AnalyzerRecoveryScheduler", () => {
   });
 
   it("resets and re-enqueues a stale PROCESSING turn", async () => {
-    find.mockResolvedValue([
+    find.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
         id: "turn-1",
         analysisProcessingStartedAt: staleStartedAt,
@@ -60,7 +65,10 @@ describe("AnalyzerRecoveryScheduler", () => {
     } as unknown as DataSource;
     const scheduler = new AnalyzerRecoveryScheduler(
       dataSource,
-      { enqueueRecoveredAnalyzeTurn } as unknown as AnalyzerQueueService,
+      {
+        enqueueRecoveredAnalyzeTurn,
+        enqueuePendingAnalyzeTurn,
+      } as unknown as AnalyzerQueueService,
       new ConfigService({ ANALYZER_PROCESSING_STALE_MS: 600_000 }),
       { addInterval } as unknown as SchedulerRegistry,
     );
@@ -75,7 +83,7 @@ describe("AnalyzerRecoveryScheduler", () => {
   });
 
   it("restores stale PROCESSING state when re-enqueueing fails", async () => {
-    find.mockResolvedValue([
+    find.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
         id: "turn-1",
         analysisProcessingStartedAt: staleStartedAt,
@@ -93,7 +101,10 @@ describe("AnalyzerRecoveryScheduler", () => {
     } as unknown as DataSource;
     const scheduler = new AnalyzerRecoveryScheduler(
       dataSource,
-      { enqueueRecoveredAnalyzeTurn } as unknown as AnalyzerQueueService,
+      {
+        enqueueRecoveredAnalyzeTurn,
+        enqueuePendingAnalyzeTurn,
+      } as unknown as AnalyzerQueueService,
       new ConfigService(),
       { addInterval } as unknown as SchedulerRegistry,
     );

@@ -3,6 +3,7 @@ import { BullModule } from "@nestjs/bullmq";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { GeminiModule } from "../ai/gemini/gemini.module";
 import { debateEntities } from "../database/typeorm.config";
+import { JudgeModule } from "../judge/judge.module";
 import { FactCheckBatchTaskService } from "./fact-check-batch-task.service";
 import { FactCheckInputAssembler } from "./fact-check-input.assembler";
 import { FactCheckerAiService } from "./fact-checker-ai.service";
@@ -17,6 +18,7 @@ import { FactCheckProcessor } from "./queues/fact-check.processor";
       name: FACT_CHECK_QUEUE,
     }),
     GeminiModule,
+    JudgeModule,
   ],
   providers: [
     FactCheckBatchTaskService,

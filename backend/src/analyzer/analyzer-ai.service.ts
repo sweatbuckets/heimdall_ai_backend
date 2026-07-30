@@ -76,7 +76,10 @@ export class AnalyzerAiService {
     const model = this.configService.getOrThrow<string>(
       "GEMINI_ANALYZER_MODEL",
     );
-    const maxRetries = this.configService.get<number>("GEMINI_MAX_RETRIES", 3);
+    const maxRetries = this.configService.get<number>(
+      "GEMINI_ANALYZER_MAX_RETRIES",
+      1,
+    );
     const timeoutMs = this.configService.get<number>(
       "GEMINI_REQUEST_TIMEOUT_MS",
       60000,

@@ -7,13 +7,7 @@ import {
 } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { MemberEntity } from "../members/entities/member.entity";
-import {
-  DebatePhase,
-  DebateSide,
-  DebateStatus,
-  DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
-} from "./domain/debate.enums";
+import { DebatePhase, DebateSide, DebateStatus } from "./domain/debate.enums";
 import {
   CreateDebateRequest,
   DebateDetailDto,
@@ -22,13 +16,16 @@ import {
 } from "./dto/debate.dto";
 import { DebateEntity } from "./entities/debate.entity";
 import { DebateTurnEntity } from "./entities/debate-turn.entity";
-import { FactCheckBatchTaskEntity } from "./entities/fact-check-batch-task.entity";
 import { JudgmentResultEntity } from "./entities/judgment-result.entity";
 import { mapJudgmentResultResponse } from "../judge/dto/judgment-result-response.dto";
+import { JudgeReadinessService } from "../judge/judge-readiness.service";
 
 @Injectable()
 export class DebatesService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly judgeReadinessService: JudgeReadinessService,
+  ) {}
 
   async createDebate(input: CreateDebateRequest): Promise<DebateDto> {
     await this.assertDebateSpeakersExist(input);
@@ -177,31 +174,23 @@ export class DebatesService {
       return mapDebateToDto(debate);
     }
 
-    if (debate.status !== DebateStatus.FINAL_FACT_CHECKING) {
+    if (debate.status !== DebateStatus.DEBATE_FINALIZED) {
       throw new ConflictException(
         `Debate cannot transition to JUDGING from ${debate.status}.`,
       );
     }
 
-    await this.assertDebateReadyForJudging(debate);
+    await this.judgeReadinessService.tryStartJudge(id);
 
-    const updateResult = await this.dataSource
-      .createQueryBuilder()
-      .update(DebateEntity)
-      .set({ status: DebateStatus.JUDGING })
-      .where("id = :id", { id })
-      .andWhere("status = :status", {
-        status: DebateStatus.FINAL_FACT_CHECKING,
-      })
-      .execute();
+    const updatedDebate = await this.getDebate(id);
 
-    if (updateResult.affected !== 1) {
+    if (updatedDebate.status === DebateStatus.DEBATE_FINALIZED) {
       throw new ConflictException(
-        `Debate cannot transition to JUDGING from ${debate.status}.`,
+        "Debate does not satisfy all Judge readiness conditions.",
       );
     }
 
-    return this.getDebate(id);
+    return updatedDebate;
   }
 
   private async assertDebateSpeakersExist(
@@ -218,51 +207,6 @@ export class DebatesService {
     if (memberCount !== 2) {
       throw new BadRequestException(
         "sideASpeakerId and sideBSpeakerId must reference existing members.",
-      );
-    }
-  }
-
-  private async assertDebateReadyForJudging(
-    debate: DebateEntity,
-  ): Promise<void> {
-    const expectedTurnCount = 4 + debate.rebuttalQuestionRounds * 2;
-    const turnRepository = this.dataSource.getRepository(DebateTurnEntity);
-    const actualTurnCount = await turnRepository.count({
-      where: { debateId: debate.id },
-    });
-
-    if (actualTurnCount !== expectedTurnCount) {
-      throw new ConflictException(
-        `Debate requires ${expectedTurnCount} finalized turns before judging.`,
-      );
-    }
-
-    const incompleteAnalysisCount = await turnRepository.count({
-      where: {
-        debateId: debate.id,
-        analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
-      },
-    });
-
-    if (incompleteAnalysisCount !== expectedTurnCount) {
-      throw new ConflictException(
-        "All debate turns must complete Analyzer before judging.",
-      );
-    }
-
-    const incompleteFactCheckTaskCount = await this.dataSource
-      .getRepository(FactCheckBatchTaskEntity)
-      .createQueryBuilder("task")
-      .innerJoin("task.turn", "turn")
-      .where("turn.debate_id = :debateId", { debateId: debate.id })
-      .andWhere("task.status <> :status", {
-        status: FactCheckBatchTaskStatus.COMPLETED,
-      })
-      .getCount();
-
-    if (incompleteFactCheckTaskCount > 0) {
-      throw new ConflictException(
-        "All fact-check batch tasks must complete before judging.",
       );
     }
   }
@@ -283,5 +227,6 @@ function mapDebateToDto(debate: DebateEntity): DebateDto {
     createdAt: debate.createdAt.toISOString(),
     startedAt: debate.startedAt?.toISOString() ?? null,
     endedAt: debate.endedAt?.toISOString() ?? null,
+    judgingStartedAt: debate.judgingStartedAt?.toISOString() ?? null,
   };
 }

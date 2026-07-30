@@ -20,7 +20,9 @@ export const envValidationSchema = Joi.object({
   GEMINI_FACT_CHECKER_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_JUDGE_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_REQUEST_TIMEOUT_MS: Joi.number().integer().min(1000).default(60000),
-  GEMINI_MAX_RETRIES: Joi.number().integer().min(0).default(3),
+  GEMINI_ANALYZER_MAX_RETRIES: Joi.number().integer().min(0).default(1),
+  GEMINI_FACT_CHECKER_MAX_RETRIES: Joi.number().integer().min(0).default(1),
+  GEMINI_JUDGE_MAX_RETRIES: Joi.number().integer().min(0).default(3),
 
   ANALYZER_MAX_COMPONENTS_PER_TURN: Joi.number().integer().min(1).default(10),
   ANALYZER_MAX_FACT_CHECK_TARGETS_PER_TURN: Joi.number()
@@ -55,4 +57,5 @@ export const envValidationSchema = Joi.object({
 
   JUDGE_MAX_OVERALL_REASON_LENGTH: Joi.number().integer().min(1).default(3000),
   JUDGE_MAX_FEEDBACK_LENGTH: Joi.number().integer().min(1).default(1500),
+  JUDGE_PROCESSING_STALE_MS: Joi.number().integer().min(300000).default(300000),
 });

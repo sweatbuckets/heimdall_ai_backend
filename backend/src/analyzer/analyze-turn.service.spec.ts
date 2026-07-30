@@ -15,6 +15,7 @@ import {
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
 import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
+import { JudgeReadinessService } from "../judge/judge-readiness.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -198,6 +199,9 @@ describe("AnalyzeTurnService", () => {
         aiService as unknown as AnalyzerAiService,
         new MockConfigService() as unknown as ConfigService,
         queue as unknown as Queue,
+        {
+          tryStartJudge: jest.fn().mockResolvedValue(undefined),
+        } as unknown as JudgeReadinessService,
       ),
       assembler,
       aiService,

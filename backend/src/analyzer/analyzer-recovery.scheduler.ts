@@ -46,6 +46,30 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
     this.recoveryRunning = true;
 
     try {
+      const pendingTurns = await this.dataSource
+        .getRepository(DebateTurnEntity)
+        .find({
+          select: { id: true },
+          where: {
+            analysisStatus: DebateTurnAnalysisStatus.PENDING,
+          },
+          order: { createdAt: "ASC" },
+          take: ANALYZER_RECOVERY_BATCH_SIZE,
+        });
+      let pendingEnqueuedCount = 0;
+
+      for (const turn of pendingTurns) {
+        try {
+          await this.analyzerQueueService.enqueuePendingAnalyzeTurn(turn.id);
+          pendingEnqueuedCount += 1;
+        } catch (error) {
+          this.logger.error(
+            `Pending Analyzer enqueue failed. turnId=${turn.id}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+
       const staleMs = this.configService.get<number>(
         "ANALYZER_PROCESSING_STALE_MS",
         DEFAULT_ANALYZER_PROCESSING_STALE_MS,
@@ -101,9 +125,9 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
         }
       }
 
-      if (recoveredCount > 0) {
+      if (pendingEnqueuedCount > 0 || recoveredCount > 0) {
         this.logger.log(
-          `Analyzer recovery completed. recovered=${recoveredCount}`,
+          `Analyzer recovery completed. pending=${pendingEnqueuedCount} recovered=${recoveredCount}`,
         );
       }
     } catch (error) {

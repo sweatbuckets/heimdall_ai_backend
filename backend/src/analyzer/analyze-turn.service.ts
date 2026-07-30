@@ -34,6 +34,7 @@ import {
   FactCheckJobData,
 } from "../fact-check/queues/fact-check.constants";
 import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
+import { JudgeReadinessService } from "../judge/judge-readiness.service";
 
 export interface AnalyzeTurnResult {
   turnId: string;
@@ -53,6 +54,7 @@ export class AnalyzeTurnService {
     private readonly configService: ConfigService,
     @InjectQueue(FACT_CHECK_QUEUE)
     private readonly factCheckQueue: Queue<FactCheckJobData>,
+    private readonly judgeReadinessService: JudgeReadinessService,
   ) {}
 
   async analyzeTurn(
@@ -135,6 +137,8 @@ export class AnalyzeTurnService {
         await this.enqueueFactCheckBatch(factCheckBatchTaskId);
       }
 
+      await this.judgeReadinessService.tryStartJudge(input.debate.id);
+
       return {
         turnId,
         componentCount: mapping.components.length,
@@ -213,6 +217,15 @@ export class AnalyzeTurnService {
       await this.enqueueFactCheckBatch(factCheckBatchTask.id);
     }
 
+    const turn = await this.dataSource.getRepository(DebateTurnEntity).findOne({
+      where: { id: turnId },
+      select: { debateId: true },
+    });
+
+    if (turn) {
+      await this.judgeReadinessService.tryStartJudge(turn.debateId);
+    }
+
     return {
       turnId,
       componentCount,
@@ -272,11 +285,10 @@ export class AnalyzeTurnService {
       },
     );
 
-    const result = await this.dataSource
+    await this.dataSource
       .createQueryBuilder()
       .update(FactCheckBatchTaskEntity)
       .set({
-        status: FactCheckBatchTaskStatus.QUEUED,
         bullMqJobId: String(job.id),
       })
       .where("id = :taskId", { taskId: factCheckBatchTaskId })
@@ -284,12 +296,6 @@ export class AnalyzeTurnService {
         status: FactCheckBatchTaskStatus.PENDING,
       })
       .execute();
-
-    if (result.affected !== 1) {
-      throw new AnalyzeTurnInputError(
-        `FactCheckBatchTask could not be queued: ${factCheckBatchTaskId}.`,
-      );
-    }
   }
 
   private getValidationLimits(): AnalyzeTurnValidationLimits {

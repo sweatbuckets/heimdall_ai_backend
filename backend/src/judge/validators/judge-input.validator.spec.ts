@@ -113,7 +113,7 @@ describe("validateJudgeInput", () => {
         factCheckBatchTasks: [
           {
             id: "task-1",
-            status: FactCheckBatchTaskStatus.QUEUED,
+            status: FactCheckBatchTaskStatus.PENDING,
           },
         ],
       }),

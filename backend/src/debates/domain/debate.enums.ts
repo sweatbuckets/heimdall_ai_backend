@@ -12,7 +12,7 @@ export enum DebateSide {
 export enum DebateStatus {
   READY = "READY",
   IN_PROGRESS = "IN_PROGRESS",
-  FINAL_FACT_CHECKING = "FINAL_FACT_CHECKING",
+  DEBATE_FINALIZED = "DEBATE_FINALIZED",
   JUDGING = "JUDGING",
   COMPLETED = "COMPLETED",
   FAILED = "FAILED",
@@ -37,7 +37,6 @@ export enum InteractionalRelationType {
 
 export enum FactCheckBatchTaskStatus {
   PENDING = "PENDING",
-  QUEUED = "QUEUED",
   PROCESSING = "PROCESSING",
   COMPLETED = "COMPLETED",
   FAILED = "FAILED",

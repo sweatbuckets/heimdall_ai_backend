@@ -2,7 +2,6 @@ import {
   BadGatewayException,
   ConflictException,
   Controller,
-  InternalServerErrorException,
   Param,
   Post,
 } from "@nestjs/common";
@@ -19,12 +18,12 @@ import {
   JudgeConflictError,
   JudgeInputError,
 } from "./errors/judge.errors";
-import { JudgeService } from "./judge.service";
+import { JudgeReadinessService } from "./judge-readiness.service";
 
 @Controller("debates/:debateId/judge")
 export class JudgeController {
   constructor(
-    private readonly judgeService: JudgeService,
+    private readonly judgeReadinessService: JudgeReadinessService,
     @InjectRepository(JudgmentResultEntity)
     private readonly judgmentResultRepository: Repository<JudgmentResultEntity>,
   ) {}
@@ -35,21 +34,42 @@ export class JudgeController {
   ): Promise<JudgmentResultResponseDto> {
     assertUuid(debateId, "debateId");
 
-    let judgmentResultId: string;
-
     try {
-      const result = await this.judgeService.judgeDebate(debateId);
-      judgmentResultId = result.judgmentResultId;
+      await this.judgeReadinessService.tryStartJudge(debateId);
     } catch (error) {
       throw mapJudgeHttpError(error);
     }
 
+    return this.getJudgmentResultOrThrow(debateId);
+  }
+
+  @Post("retry")
+  async retryJudge(
+    @Param("debateId") debateId: string,
+  ): Promise<JudgmentResultResponseDto> {
+    assertUuid(debateId, "debateId");
+
+    try {
+      await this.judgeReadinessService.tryStartJudge(debateId);
+      await this.judgeReadinessService.retryStaleJudge(debateId);
+    } catch (error) {
+      throw mapJudgeHttpError(error);
+    }
+
+    return this.getJudgmentResultOrThrow(debateId);
+  }
+
+  private async getJudgmentResultOrThrow(
+    debateId: string,
+  ): Promise<JudgmentResultResponseDto> {
     const judgmentResult = await this.judgmentResultRepository.findOne({
-      where: { id: judgmentResultId },
+      where: { debateId },
     });
 
     if (!judgmentResult) {
-      throw new InternalServerErrorException("JudgmentResult was not found.");
+      throw new ConflictException(
+        "Judge is still running or is not eligible for retry.",
+      );
     }
 
     return mapJudgmentResultResponse(judgmentResult);

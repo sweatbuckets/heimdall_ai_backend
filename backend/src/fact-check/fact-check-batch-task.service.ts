@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectQueue } from "@nestjs/bullmq";
@@ -26,14 +25,11 @@ import {
   NonRetryableFactCheckError,
   FactCheckConflictError,
 } from "./errors/fact-check.errors";
-import {
-  DebateStatus,
-  FactCheckBatchTaskStatus,
-} from "../debates/domain/debate.enums";
-import { DebateEntity } from "../debates/entities/debate.entity";
+import { FactCheckBatchTaskStatus } from "../debates/domain/debate.enums";
 import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
 import { FactCheckResultEntity } from "../debates/entities/fact-check-result.entity";
 import { FactCheckSourceEntity } from "../debates/entities/fact-check-source.entity";
+import { JudgeReadinessService } from "../judge/judge-readiness.service";
 
 @Injectable()
 export class FactCheckBatchTaskService {
@@ -44,6 +40,7 @@ export class FactCheckBatchTaskService {
     private readonly configService: ConfigService,
     @InjectQueue(FACT_CHECK_QUEUE)
     private readonly factCheckQueue: Queue<FactCheckJobData>,
+    private readonly judgeReadinessService: JudgeReadinessService,
   ) {}
 
   async process(
@@ -53,7 +50,13 @@ export class FactCheckBatchTaskService {
     const claimed = await this.claimTask(factCheckBatchTaskId);
 
     if (!claimed) {
-      await this.handleUnclaimedTask(factCheckBatchTaskId);
+      const completedDebateId =
+        await this.handleUnclaimedTask(factCheckBatchTaskId);
+
+      if (completedDebateId) {
+        await this.judgeReadinessService.tryStartJudge(completedDebateId);
+      }
+
       return;
     }
 
@@ -88,7 +91,7 @@ export class FactCheckBatchTaskService {
       );
 
       await this.saveResultsAndCompleteTask(factCheckBatchTaskId, entities);
-      await this.transitionDebateToJudgingIfReady(factCheckBatchTaskId);
+      await this.judgeReadinessService.tryStartJudge(input.debate.id);
     } catch (error) {
       await this.handleProcessingFailure(factCheckBatchTaskId, job, error);
 
@@ -152,11 +155,8 @@ export class FactCheckBatchTaskService {
         failureReason: null,
       })
       .where("id = :taskId", { taskId: factCheckBatchTaskId })
-      .andWhere("status IN (:...statuses)", {
-        statuses: [
-          FactCheckBatchTaskStatus.PENDING,
-          FactCheckBatchTaskStatus.QUEUED,
-        ],
+      .andWhere("status = :status", {
+        status: FactCheckBatchTaskStatus.PENDING,
       })
       .execute();
 
@@ -165,11 +165,12 @@ export class FactCheckBatchTaskService {
 
   private async handleUnclaimedTask(
     factCheckBatchTaskId: string,
-  ): Promise<void> {
+  ): Promise<string | null> {
     const task = await this.dataSource
       .getRepository(FactCheckBatchTaskEntity)
       .findOne({
         where: { id: factCheckBatchTaskId },
+        relations: { turn: true },
       });
 
     if (!task) {
@@ -178,14 +179,17 @@ export class FactCheckBatchTaskService {
       );
     }
 
+    if (task.status === FactCheckBatchTaskStatus.COMPLETED) {
+      return task.turn?.debateId ?? null;
+    }
+
     if (
       [
         FactCheckBatchTaskStatus.PROCESSING,
-        FactCheckBatchTaskStatus.COMPLETED,
         FactCheckBatchTaskStatus.FAILED,
       ].includes(task.status)
     ) {
-      return;
+      return null;
     }
 
     throw new FactCheckConflictError(
@@ -240,7 +244,7 @@ export class FactCheckBatchTaskService {
       error instanceof NonRetryableFactCheckError || this.isFinalAttempt(job);
     const status = finalFailure
       ? FactCheckBatchTaskStatus.FAILED
-      : FactCheckBatchTaskStatus.QUEUED;
+      : FactCheckBatchTaskStatus.PENDING;
 
     await this.dataSource
       .createQueryBuilder()
@@ -269,11 +273,49 @@ export class FactCheckBatchTaskService {
   }
 
   private async enqueueTask(factCheckBatchTaskId: string): Promise<boolean> {
-    const job = await this.factCheckQueue.add(
+    const job = await this.ensureBullMqJob(factCheckBatchTaskId);
+
+    await this.dataSource
+      .createQueryBuilder()
+      .update(FactCheckBatchTaskEntity)
+      .set({
+        bullMqJobId: String(job.id),
+      })
+      .where("id = :taskId", { taskId: factCheckBatchTaskId })
+      .andWhere("status = :status", {
+        status: FactCheckBatchTaskStatus.PENDING,
+      })
+      .execute();
+
+    return true;
+  }
+
+  private async ensureBullMqJob(
+    factCheckBatchTaskId: string,
+  ): Promise<Job<FactCheckJobData>> {
+    const jobId = factCheckBatchTaskId;
+    const existingJob = await this.factCheckQueue.getJob(jobId);
+
+    if (existingJob) {
+      const state = await existingJob.getState();
+
+      if (state === "failed") {
+        await existingJob.retry();
+        return existingJob;
+      }
+
+      if (state !== "completed") {
+        return existingJob;
+      }
+
+      await existingJob.remove();
+    }
+
+    return this.factCheckQueue.add(
       FACT_CHECK_BATCH_JOB,
       { factCheckBatchTaskId },
       {
-        jobId: `${factCheckBatchTaskId}-recovery-${randomUUID()}`,
+        jobId,
         attempts: FACT_CHECK_JOB_ATTEMPTS,
         backoff: {
           type: "exponential",
@@ -281,64 +323,6 @@ export class FactCheckBatchTaskService {
         },
       },
     );
-
-    const result = await this.dataSource
-      .createQueryBuilder()
-      .update(FactCheckBatchTaskEntity)
-      .set({
-        status: FactCheckBatchTaskStatus.QUEUED,
-        bullMqJobId: String(job.id),
-      })
-      .where("id = :taskId", { taskId: factCheckBatchTaskId })
-      .andWhere("status IN (:...statuses)", {
-        statuses: [
-          FactCheckBatchTaskStatus.PENDING,
-          FactCheckBatchTaskStatus.QUEUED,
-        ],
-      })
-      .execute();
-
-    return result.affected === 1;
-  }
-
-  private async transitionDebateToJudgingIfReady(
-    factCheckBatchTaskId: string,
-  ): Promise<void> {
-    const task = await this.dataSource
-      .getRepository(FactCheckBatchTaskEntity)
-      .createQueryBuilder("task")
-      .innerJoinAndSelect("task.turn", "turn")
-      .innerJoinAndSelect("turn.debate", "debate")
-      .where("task.id = :taskId", { taskId: factCheckBatchTaskId })
-      .getOne();
-
-    if (!task || task.turn.debate.status !== DebateStatus.FINAL_FACT_CHECKING) {
-      return;
-    }
-
-    const incompleteTaskCount = await this.dataSource
-      .getRepository(FactCheckBatchTaskEntity)
-      .createQueryBuilder("task")
-      .innerJoin("task.turn", "turn")
-      .where("turn.debate_id = :debateId", { debateId: task.turn.debateId })
-      .andWhere("task.status <> :status", {
-        status: FactCheckBatchTaskStatus.COMPLETED,
-      })
-      .getCount();
-
-    if (incompleteTaskCount > 0) {
-      return;
-    }
-
-    await this.dataSource
-      .createQueryBuilder()
-      .update(DebateEntity)
-      .set({ status: DebateStatus.JUDGING })
-      .where("id = :debateId", { debateId: task.turn.debateId })
-      .andWhere("status = :status", {
-        status: DebateStatus.FINAL_FACT_CHECKING,
-      })
-      .execute();
   }
 }
 

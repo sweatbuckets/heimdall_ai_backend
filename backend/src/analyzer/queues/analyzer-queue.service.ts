@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
-import { Queue } from "bullmq";
+import { Job, Queue } from "bullmq";
 import {
   ANALYZER_QUEUE,
   ANALYZE_TURN_JOB,
@@ -22,10 +21,13 @@ export class AnalyzerQueueService {
   }
 
   async enqueueRecoveredAnalyzeTurn(turnId: string): Promise<string> {
-    return this.enqueue(
-      turnId,
-      `${ANALYZE_TURN_JOB}-${turnId}-recovery-${randomUUID()}`,
-    );
+    const job = await this.ensureJob(turnId);
+    return String(job.id);
+  }
+
+  async enqueuePendingAnalyzeTurn(turnId: string): Promise<string> {
+    const job = await this.ensureJob(turnId);
+    return String(job.id);
   }
 
   private async enqueue(turnId: string, jobId: string): Promise<string> {
@@ -43,5 +45,38 @@ export class AnalyzerQueueService {
     );
 
     return String(job.id);
+  }
+
+  private async ensureJob(turnId: string): Promise<Job<AnalyzeTurnJobData>> {
+    const jobId = `${ANALYZE_TURN_JOB}-${turnId}`;
+    const existingJob = await this.analyzerQueue.getJob(jobId);
+
+    if (existingJob) {
+      const state = await existingJob.getState();
+
+      if (state === "failed") {
+        await existingJob.retry();
+        return existingJob;
+      }
+
+      if (state !== "completed") {
+        return existingJob;
+      }
+
+      await existingJob.remove();
+    }
+
+    return this.analyzerQueue.add(
+      ANALYZE_TURN_JOB,
+      { turnId },
+      {
+        jobId,
+        attempts: ANALYZE_TURN_JOB_ATTEMPTS,
+        backoff: {
+          type: "exponential",
+          delay: ANALYZE_TURN_JOB_BACKOFF_DELAY_MS,
+        },
+      },
+    );
   }
 }
