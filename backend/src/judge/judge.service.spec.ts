@@ -13,6 +13,7 @@ import { JudgeInputAssembler } from "./judge-input.assembler";
 import { JudgeService } from "./judge.service";
 import { AssembledJudgeInput, JudgeOutput } from "./dto/judge.dto";
 import { JudgeConflictError, JudgeInputError } from "./errors/judge.errors";
+import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -50,6 +51,20 @@ class MockEntityManager {
   async insert(_entity: unknown, value: unknown): Promise<void> {
     this.insertedValues.push(value);
   }
+
+  async findOne(_entity: unknown, _options: object): Promise<object> {
+    return {
+      id: "debate-1",
+      communityId: "community-1",
+      status: DebateStatus.JUDGING,
+    };
+  }
+
+  async update(
+    _entity: unknown,
+    _criteria: object,
+    _values: object,
+  ): Promise<void> {}
 
   createQueryBuilder(): MockUpdateQueryBuilder {
     return new MockUpdateQueryBuilder(this.updateAffected);
@@ -164,6 +179,7 @@ describe("JudgeService", () => {
         assembler as unknown as JudgeInputAssembler,
         aiService as unknown as JudgeAiService,
         new MockConfigService() as unknown as ConfigService,
+        new AiInvocationCancellationService(),
       ),
       assembler,
       aiService,
@@ -176,7 +192,10 @@ describe("JudgeService", () => {
 
     const result = await service.judgeDebate("debate-1");
 
-    expect(aiService.judge).toHaveBeenCalledWith(assembled.input);
+    expect(aiService.judge).toHaveBeenCalledWith(
+      assembled.input,
+      expect.anything(),
+    );
     expect(dataSource.manager.insertedValues).toHaveLength(1);
     expect(dataSource.manager.insertedValues[0]).toMatchObject({
       debateId: "debate-1",

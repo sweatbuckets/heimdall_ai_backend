@@ -18,6 +18,7 @@ import {
 import { DebateEntity } from "./debate.entity";
 import { ArgumentComponentEntity } from "./argument-component.entity";
 import { FactCheckBatchTaskEntity } from "./fact-check-batch-task.entity";
+import { DebateTurnVoteEntity } from "./debate-turn-vote.entity";
 
 @Entity("debate_turn")
 @Unique("uq_debate_turn_debate_sequence", ["debateId", "sequence"])
@@ -88,4 +89,7 @@ export class DebateTurnEntity {
 
   @OneToOne(() => FactCheckBatchTaskEntity, (task) => task.turn)
   factCheckBatchTask: FactCheckBatchTaskEntity | null;
+
+  @OneToMany(() => DebateTurnVoteEntity, (vote) => vote.turn)
+  votes: DebateTurnVoteEntity[];
 }

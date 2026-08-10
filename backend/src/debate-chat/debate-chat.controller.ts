@@ -3,10 +3,13 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
 } from "@nestjs/common";
+import { CurrentMember } from "../auth/current-member.decorator";
+import { AuthPrincipal } from "../auth/dto/auth.dto";
 import { randomUUID } from "node:crypto";
 import { assertUuid } from "../common/http/id.validator";
 import {
@@ -48,12 +51,14 @@ export class DebateChatController {
   @Post("messages")
   async appendDraftMessage(
     @Param("debateId") debateId: string,
+    @CurrentMember() principal: AuthPrincipal,
     @Body() body: unknown,
   ): Promise<DebateTurnMessageAppendResult> {
     assertUuid(debateId, "debateId");
 
     try {
       const command = buildMessageSendCommand(debateId, body);
+      assertAuthenticatedSpeaker(command.payload.speakerId, principal);
       return await this.debateChatService.appendDraftMessage(debateId, command);
     } catch (error) {
       throw mapDebateChatHttpError(error);
@@ -63,16 +68,29 @@ export class DebateChatController {
   @Post("finalize")
   async finalizeTurn(
     @Param("debateId") debateId: string,
+    @CurrentMember() principal: AuthPrincipal,
     @Body() body: unknown,
   ): Promise<DebateChatTurnDto> {
     assertUuid(debateId, "debateId");
 
     try {
       const command = buildFinalizeCommand(debateId, body);
+      assertAuthenticatedSpeaker(command.payload.speakerId, principal);
       return await this.debateChatService.finalizeTurn(debateId, command);
     } catch (error) {
       throw mapDebateChatHttpError(error);
     }
+  }
+}
+
+function assertAuthenticatedSpeaker(
+  speakerId: string,
+  principal: AuthPrincipal,
+): void {
+  if (speakerId !== principal.memberId) {
+    throw new ForbiddenException(
+      "Authenticated member does not match payload.speakerId.",
+    );
   }
 }
 

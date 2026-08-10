@@ -10,12 +10,14 @@ import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
 import {
   DebatePhase,
   DebateSide,
+  DebateStatus,
   DebateTurnAnalysisStatus,
 } from "../debates/domain/debate.enums";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
 import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
 import { JudgeReadinessService } from "../judge/judge-readiness.service";
+import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -60,6 +62,10 @@ class MockEntityManager {
 
   async insert(entity: unknown, values: unknown): Promise<void> {
     this.inserts.push({ entity, values });
+  }
+
+  async findOne(_entity: unknown, _options: object): Promise<object> {
+    return { id: "debate-1", status: DebateStatus.IN_PROGRESS };
   }
 
   createQueryBuilder(): MockUpdateQueryBuilder {
@@ -202,6 +208,7 @@ describe("AnalyzeTurnService", () => {
         {
           tryStartJudge: jest.fn().mockResolvedValue(undefined),
         } as unknown as JudgeReadinessService,
+        new AiInvocationCancellationService(),
       ),
       assembler,
       aiService,
@@ -225,7 +232,7 @@ describe("AnalyzeTurnService", () => {
     const result = await service.analyzeTurn(turnId);
 
     expect(assembler.assemble).toHaveBeenCalledWith(turnId);
-    expect(aiService.analyze).toHaveBeenCalledWith(input);
+    expect(aiService.analyze).toHaveBeenCalledWith(input, expect.anything());
     expect(dataSource.manager.inserts).toHaveLength(0);
     expect(dataSource.manager.completionQueryBuilder.sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.COMPLETED,

@@ -11,6 +11,18 @@ export class MemberEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
+  @Column({ type: "varchar", length: 320, nullable: true, unique: true })
+  email: string | null;
+
+  @Column({
+    name: "password_hash",
+    type: "varchar",
+    length: 100,
+    nullable: true,
+    select: false,
+  })
+  passwordHash: string | null;
+
   @Column({ name: "display_name", type: "varchar", length: 100 })
   displayName: string;
 
@@ -21,6 +33,12 @@ export class MemberEntity {
     nullable: true,
   })
   profileImageUrl: string | null;
+
+  @Column({ type: "varchar", length: 20, nullable: true })
+  gender: string | null;
+
+  @Column({ type: "int", nullable: true })
+  age: number | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

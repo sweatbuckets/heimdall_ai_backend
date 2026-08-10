@@ -30,6 +30,11 @@ import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-t
 import { FactCheckResultEntity } from "../debates/entities/fact-check-result.entity";
 import { FactCheckSourceEntity } from "../debates/entities/fact-check-source.entity";
 import { JudgeReadinessService } from "../judge/judge-readiness.service";
+import {
+  AiInvocationCancellationService,
+  AiInvocationCancelledError,
+} from "../ai/ai-invocation-cancellation.service";
+import { DebateStatus } from "../debates/domain/debate.enums";
 
 @Injectable()
 export class FactCheckBatchTaskService {
@@ -41,6 +46,7 @@ export class FactCheckBatchTaskService {
     @InjectQueue(FACT_CHECK_QUEUE)
     private readonly factCheckQueue: Queue<FactCheckJobData>,
     private readonly judgeReadinessService: JudgeReadinessService,
+    private readonly aiCancellationService: AiInvocationCancellationService,
   ) {}
 
   async process(
@@ -69,8 +75,10 @@ export class FactCheckBatchTaskService {
         ),
       });
 
-      const { output, groundedEvidence } =
-        await this.factCheckerAiService.check(input);
+      const { output, groundedEvidence } = await this.aiCancellationService.run(
+        input.debate.id,
+        (signal) => this.factCheckerAiService.check(input, signal),
+      );
 
       validateFactCheckBatchOutput(input, output, groundedEvidence, {
         maxReasonLength: this.configService.get<number>(
@@ -95,7 +103,10 @@ export class FactCheckBatchTaskService {
     } catch (error) {
       await this.handleProcessingFailure(factCheckBatchTaskId, job, error);
 
-      if (error instanceof NonRetryableFactCheckError) {
+      if (
+        error instanceof NonRetryableFactCheckError ||
+        error instanceof AiInvocationCancelledError
+      ) {
         return;
       }
 
@@ -205,6 +216,15 @@ export class FactCheckBatchTaskService {
     },
   ): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
+      const task = await manager.findOne(FactCheckBatchTaskEntity, {
+        where: { id: factCheckBatchTaskId },
+        relations: { turn: { debate: true } },
+        lock: { mode: "pessimistic_read" },
+      });
+      if (!task || task.turn.debate.status === DebateStatus.FAILED) {
+        throw new AiInvocationCancelledError(task?.turn.debateId ?? "unknown");
+      }
+
       if (entities.results.length > 0) {
         await manager.insert(FactCheckResultEntity, entities.results);
       }
@@ -241,7 +261,9 @@ export class FactCheckBatchTaskService {
     error: unknown,
   ): Promise<void> {
     const finalFailure =
-      error instanceof NonRetryableFactCheckError || this.isFinalAttempt(job);
+      error instanceof NonRetryableFactCheckError ||
+      error instanceof AiInvocationCancelledError ||
+      this.isFinalAttempt(job);
     const status = finalFailure
       ? FactCheckBatchTaskStatus.FAILED
       : FactCheckBatchTaskStatus.PENDING;

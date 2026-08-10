@@ -128,9 +128,19 @@ export interface DebateChatErrorEvent {
   message: string;
 }
 
+export interface DebateEndedEvent {
+  id: string;
+  type: "debate.ended";
+  communityId: string;
+  debateId: string;
+  status: string;
+  reason: string | null;
+}
+
 export type DebateChatServerEvent =
   | DebateConnectionRestoredEvent
   | DebateTurnMessageAckEvent
   | DebateTurnMessageCreatedEvent
   | DebateTurnFinalizedEvent
+  | DebateEndedEvent
   | DebateChatErrorEvent;

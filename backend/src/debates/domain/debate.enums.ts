@@ -25,6 +25,11 @@ export enum DebateTurnAnalysisStatus {
   FAILED = "FAILED",
 }
 
+export enum DebateTurnVoteType {
+  LIKE = "LIKE",
+  DISLIKE = "DISLIKE",
+}
+
 export enum ArgumentalRelationType {
   SUPPORTS = "SUPPORTS",
   ATTACKS = "ATTACKS",

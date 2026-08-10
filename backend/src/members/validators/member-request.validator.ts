@@ -1,8 +1,17 @@
 import { BadRequestException } from "@nestjs/common";
-import { CreateMemberRequest, UpdateMemberRequest } from "../dto/member.dto";
+import {
+  CreateMemberRequest,
+  LoginMemberRequest,
+  SignUpMemberRequest,
+  UpdateMemberRequest,
+} from "../dto/member.dto";
 
 const MAX_DISPLAY_NAME_LENGTH = 100;
 const MAX_PROFILE_IMAGE_URL_LENGTH = 1000;
+const MAX_EMAIL_LENGTH = 320;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_BYTES = 72;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function validateCreateMemberRequest(
   body: unknown,
@@ -22,6 +31,43 @@ export function validateCreateMemberRequest(
       "profileImageUrl",
       MAX_PROFILE_IMAGE_URL_LENGTH,
     ),
+  };
+}
+
+export function validateSignUpMemberRequest(
+  body: unknown,
+): SignUpMemberRequest {
+  if (!isRecord(body)) {
+    throw new BadRequestException("Request body must be an object.");
+  }
+
+  const email = readEmail(body);
+  const password = readPassword(body, MIN_PASSWORD_LENGTH);
+  const displayName = readRequiredString(body, "displayName", 20);
+  const age = readOptionalAge(body);
+
+  return {
+    email,
+    password,
+    displayName,
+    profileImageUrl: readOptionalStringOrNull(
+      body,
+      "profileImageUrl",
+      MAX_PROFILE_IMAGE_URL_LENGTH,
+    ),
+    gender: readOptionalStringOrNull(body, "gender", 20),
+    age,
+  };
+}
+
+export function validateLoginMemberRequest(body: unknown): LoginMemberRequest {
+  if (!isRecord(body)) {
+    throw new BadRequestException("Request body must be an object.");
+  }
+
+  return {
+    email: readEmail(body),
+    password: readPassword(body, 1),
   };
 }
 
@@ -111,6 +157,58 @@ function readOptionalStringOrNull(
   }
 
   return trimmed;
+}
+
+function readEmail(body: Record<string, unknown>): string {
+  const email = readRequiredString(
+    body,
+    "email",
+    MAX_EMAIL_LENGTH,
+  ).toLowerCase();
+
+  if (!EMAIL_PATTERN.test(email)) {
+    throw new BadRequestException("email must be a valid email address.");
+  }
+
+  return email;
+}
+
+function readPassword(
+  body: Record<string, unknown>,
+  minimumLength: number,
+): string {
+  const password = body.password;
+
+  if (typeof password !== "string" || password.length < minimumLength) {
+    throw new BadRequestException(
+      `password must be at least ${minimumLength} characters.`,
+    );
+  }
+
+  if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
+    throw new BadRequestException(
+      `password exceeds maximum byte length: ${MAX_PASSWORD_BYTES}.`,
+    );
+  }
+
+  return password;
+}
+
+function readOptionalAge(
+  body: Record<string, unknown>,
+): number | null | undefined {
+  const age = body.age;
+  if (age === undefined) return undefined;
+  if (age === null) return null;
+  if (
+    typeof age !== "number" ||
+    !Number.isInteger(age) ||
+    age < 0 ||
+    age > 150
+  ) {
+    throw new BadRequestException("age must be an integer between 0 and 150.");
+  }
+  return age;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

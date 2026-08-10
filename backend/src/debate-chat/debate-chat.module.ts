@@ -2,13 +2,16 @@ import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
 import { AnalyzerModule } from "../analyzer/analyzer.module";
+import { AuthModule } from "../auth/auth.module";
+import { CommunityChatModule } from "../community-chat/community-chat.module";
 import { DEBATE_CHAT_REDIS } from "./debate-chat.constants";
 import { DebateChatController } from "./debate-chat.controller";
 import { DebateChatService } from "./debate-chat.service";
 import { DebateChatWebSocketServer } from "./debate-chat.websocket-server";
+import { DebateTurnTimeoutScheduler } from "./debate-turn-timeout.scheduler";
 
 @Module({
-  imports: [AnalyzerModule],
+  imports: [AnalyzerModule, AuthModule, CommunityChatModule],
   controllers: [DebateChatController],
   providers: [
     {
@@ -26,7 +29,8 @@ import { DebateChatWebSocketServer } from "./debate-chat.websocket-server";
     },
     DebateChatService,
     DebateChatWebSocketServer,
+    DebateTurnTimeoutScheduler,
   ],
-  exports: [DebateChatService],
+  exports: [DebateChatService, DebateChatWebSocketServer],
 })
 export class DebateChatModule {}

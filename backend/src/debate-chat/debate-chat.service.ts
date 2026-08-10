@@ -30,6 +30,11 @@ import {
   DebateChatInputError,
   DebateChatStateError,
 } from "./errors/debate-chat.errors";
+import { DEBATE_TOTAL_DURATION_MS } from "../debates/debate-timeout.constants";
+import {
+  getDebateTurnLimitMs,
+  getDebateTurnLimitSeconds,
+} from "./debate-turn-time-limit";
 
 interface DebateDraftScope {
   debateId: string;
@@ -48,8 +53,6 @@ interface NextTurnState {
 }
 
 const MAX_TURN_TOTAL_CONTENT_LENGTH = 1000;
-const TURN_TIME_LIMIT_MS = 2 * 60 * 1000;
-const TURN_TIME_LIMIT_SECONDS = TURN_TIME_LIMIT_MS / 1000;
 const APPEND_DRAFT_MESSAGE_SCRIPT = `
 local draftKey = KEYS[1]
 local draftCharCountKey = KEYS[2]
@@ -121,6 +124,23 @@ export class DebateChatService implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.redis.quit();
+  }
+
+  async clearDebateDrafts(debateId: string): Promise<void> {
+    const setKey = buildDraftKeysKey(debateId);
+    const draftKeys = await this.redis.smembers(setKey);
+    if (draftKeys.length === 0) {
+      await this.redis.del(setKey);
+      return;
+    }
+
+    const relatedKeys = draftKeys.flatMap((draftKey) => [
+      draftKey,
+      draftKey.replace("debate-chat:draft:", "debate-chat:draft-char-count:"),
+      draftKey.replace("debate-chat:draft:", "debate-chat:draft-dedup:"),
+      draftKey.replace("debate-chat:draft:", "debate-chat:finalize-lock:"),
+    ]);
+    await this.redis.del(...relatedKeys, setKey);
   }
 
   async getConnectionSnapshot(debateId: string): Promise<{
@@ -232,13 +252,9 @@ export class DebateChatService implements OnModuleDestroy {
 
     try {
       const rawMessages = await this.redis.lrange(draftKey, 0, -1);
-      const draftMessages = rawMessages.map(parseDraftMessage);
-
-      if (draftMessages.length === 0) {
-        throw new DebateChatInputError(
-          "No draft messages exist for this turn.",
-        );
-      }
+      const draftMessages = rawMessages.length > 0
+        ? rawMessages.map(parseDraftMessage)
+        : [createEmptyTurnDraft(scope)];
 
       const content = draftMessages
         .map((message) => message.content.trim())
@@ -302,6 +318,49 @@ export class DebateChatService implements OnModuleDestroy {
       return finalizedTurn;
     } finally {
       await this.releaseFinalizeLock(lockKey, command.id);
+    }
+  }
+
+  async finalizeExpiredTurn(
+    debateId: string,
+  ): Promise<DebateChatTurnDto | null> {
+    const debate = await this.dataSource.getRepository(DebateEntity).findOne({
+      where: { id: debateId },
+    });
+    if (
+      !debate ||
+      debate.status !== DebateStatus.IN_PROGRESS ||
+      !debate.currentPhase ||
+      !debate.currentRound ||
+      !debate.currentTurnSide ||
+      !debate.currentTurnStartedAt ||
+      Date.now() <
+        debate.currentTurnStartedAt.getTime() +
+          getDebateTurnLimitMs(debate.currentPhase)
+    ) {
+      return null;
+    }
+
+    const command: DebateTurnFinalizeCommand = {
+      id: `timeout-${randomUUID()}`,
+      type: "debate.turn.finalize",
+      debateId,
+      payload: {
+        speakerId:
+          debate.currentTurnSide === DebateSide.SIDE_A
+            ? debate.sideASpeakerId
+            : debate.sideBSpeakerId,
+        speakerSide: debate.currentTurnSide,
+        phase: debate.currentPhase,
+        round: debate.currentRound,
+      },
+    };
+
+    try {
+      return await this.finalizeTurn(debateId, command);
+    } catch (error) {
+      if (error instanceof DebateChatStateError) return null;
+      throw error;
     }
   }
 
@@ -374,6 +433,12 @@ function validateDebateCanReceiveTurn(debate: DebateEntity): void {
     throw new DebateChatStateError(
       `Debate cannot receive turns in status: ${debate.status}.`,
     );
+  }
+  if (
+    debate.startedAt &&
+    Date.now() >= debate.startedAt.getTime() + DEBATE_TOTAL_DURATION_MS
+  ) {
+    throw new DebateChatStateError("The debate's 27-minute limit has expired.");
   }
 }
 
@@ -456,7 +521,10 @@ function validateCurrentTurnTime(debate: DebateEntity): void {
 
   const elapsedMs = Date.now() - debate.currentTurnStartedAt.getTime();
 
-  if (elapsedMs > TURN_TIME_LIMIT_MS) {
+  if (
+    !debate.currentPhase ||
+    elapsedMs >= getDebateTurnLimitMs(debate.currentPhase)
+  ) {
     throw new DebateChatStateError("Current turn time limit has expired.");
   }
 }
@@ -712,7 +780,22 @@ function mapCurrentTurnToDto(
     round: debate.currentRound,
     turnSide: debate.currentTurnSide,
     startedAt: debate.currentTurnStartedAt.toISOString(),
-    maxDurationSeconds: TURN_TIME_LIMIT_SECONDS,
+    maxDurationSeconds: getDebateTurnLimitSeconds(debate.currentPhase),
     maxTotalCharacters: MAX_TURN_TOTAL_CONTENT_LENGTH,
+  };
+}
+
+function createEmptyTurnDraft(
+  scope: DebateDraftScope,
+): DebateChatDraftMessageDto {
+  return {
+    id: randomUUID(),
+    debateId: scope.debateId,
+    speakerId: scope.speakerId,
+    speakerSide: scope.speakerSide,
+    phase: scope.phase as DebatePhase,
+    round: scope.round,
+    content: "발언 없음",
+    createdAt: new Date().toISOString(),
   };
 }

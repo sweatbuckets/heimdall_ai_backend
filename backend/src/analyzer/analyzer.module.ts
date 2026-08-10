@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { BullModule } from "@nestjs/bullmq";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { GeminiModule } from "../ai/gemini/gemini.module";
+import { AiInvocationModule } from "../ai/ai-invocation.module";
 import { debateEntities } from "../database/typeorm.config";
 import { FACT_CHECK_QUEUE } from "../fact-check/queues/fact-check.constants";
 import { JudgeModule } from "../judge/judge.module";
@@ -25,6 +26,7 @@ import { AnalyzeTurnService } from "./analyze-turn.service";
       },
     ),
     GeminiModule,
+    AiInvocationModule,
     JudgeModule,
   ],
   providers: [

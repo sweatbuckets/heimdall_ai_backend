@@ -13,10 +13,12 @@ import { DebatePhase, DebateSide, DebateStatus } from "../domain/debate.enums";
 import { DebateTurnEntity } from "./debate-turn.entity";
 import { JudgmentResultEntity } from "./judgment-result.entity";
 import { MemberEntity } from "../../members/entities/member.entity";
+import { CommunityEntity } from "../../community-chat/entities/community.entity";
 
 @Entity("debate")
 @Index("idx_debate_status", ["status"])
 @Index("idx_debate_judging_recovery", ["status", "judgingStartedAt"])
+@Index("idx_debate_timeout_recovery", ["status", "startedAt"])
 @Index("idx_debate_current_turn", [
   "status",
   "currentPhase",
@@ -26,6 +28,9 @@ import { MemberEntity } from "../../members/entities/member.entity";
 export class DebateEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
+
+  @Column({ name: "community_id", type: "uuid" })
+  communityId: string;
 
   @Column({ type: "varchar", length: 500 })
   topic: string;
@@ -101,6 +106,12 @@ export class DebateEntity {
   @ManyToOne(() => MemberEntity, { onDelete: "RESTRICT" })
   @JoinColumn({ name: "side_b_speaker_id" })
   sideBSpeaker: MemberEntity;
+
+  @ManyToOne(() => CommunityEntity, (community) => community.debates, {
+    onDelete: "RESTRICT",
+  })
+  @JoinColumn({ name: "community_id" })
+  community: CommunityEntity;
 
   @OneToOne(
     () => JudgmentResultEntity,

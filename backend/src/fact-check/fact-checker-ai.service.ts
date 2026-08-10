@@ -41,7 +41,10 @@ export class FactCheckerAiService {
     private readonly configService: ConfigService,
   ) {}
 
-  async check(input: FactCheckBatchInput): Promise<{
+  async check(
+    input: FactCheckBatchInput,
+    abortSignal?: AbortSignal,
+  ): Promise<{
     output: FactCheckBatchOutput;
     groundedEvidence: GroundedEvidenceBundle;
   }> {
@@ -73,6 +76,7 @@ export class FactCheckerAiService {
       maxRetries,
       timeoutMs,
       maxSourcesPerResult * input.targets.length,
+      abortSignal,
     );
     const output = await this.generateStructuredOutputWithRetry(
       model,
@@ -80,6 +84,7 @@ export class FactCheckerAiService {
       groundedEvidence,
       maxRetries,
       timeoutMs,
+      abortSignal,
     );
 
     validateFactCheckBatchOutput(input, output, groundedEvidence, {
@@ -96,17 +101,24 @@ export class FactCheckerAiService {
     maxRetries: number,
     timeoutMs: number,
     maxSources: number,
+    abortSignal?: AbortSignal,
   ): Promise<GroundedEvidenceBundle> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         return await withTimeout(
-          this.generateGroundedEvidence(model, input, maxSources),
+          this.generateGroundedEvidence(
+            model,
+            input,
+            maxSources,
+            abortSignal,
+          ),
           timeoutMs,
           "Gemini fact checker grounding request timed out.",
         );
       } catch (error) {
+        if (abortSignal?.aborted) throw error;
         lastError = error;
 
         if (attempt === maxRetries) {
@@ -124,17 +136,24 @@ export class FactCheckerAiService {
     groundedEvidence: GroundedEvidenceBundle,
     maxRetries: number,
     timeoutMs: number,
+    abortSignal?: AbortSignal,
   ): Promise<FactCheckBatchOutput> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         return await withTimeout(
-          this.generateStructuredOutput(model, input, groundedEvidence),
+          this.generateStructuredOutput(
+            model,
+            input,
+            groundedEvidence,
+            abortSignal,
+          ),
           timeoutMs,
           "Gemini fact checker synthesis request timed out.",
         );
       } catch (error) {
+        if (abortSignal?.aborted) throw error;
         lastError = error;
 
         if (attempt === maxRetries) {
@@ -150,6 +169,7 @@ export class FactCheckerAiService {
     model: string,
     input: FactCheckBatchInput,
     maxSources: number,
+    abortSignal?: AbortSignal,
   ): Promise<GroundedEvidenceBundle> {
     const response = await this.gemini.models.generateContent({
       model,
@@ -164,6 +184,7 @@ export class FactCheckerAiService {
         },
       ],
       config: {
+        abortSignal,
         systemInstruction: FACT_CHECK_GROUNDING_SYSTEM_INSTRUCTION,
         tools: [{ googleSearch: {} }],
         temperature: 0.1,
@@ -177,6 +198,7 @@ export class FactCheckerAiService {
     model: string,
     input: FactCheckBatchInput,
     groundedEvidence: GroundedEvidenceBundle,
+    abortSignal?: AbortSignal,
   ): Promise<FactCheckBatchOutput> {
     const response = await this.gemini.models.generateContent({
       model,
@@ -191,6 +213,7 @@ export class FactCheckerAiService {
         },
       ],
       config: {
+        abortSignal,
         systemInstruction: FACT_CHECK_SYNTHESIS_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: FACT_CHECK_BATCH_RESPONSE_SCHEMA,
