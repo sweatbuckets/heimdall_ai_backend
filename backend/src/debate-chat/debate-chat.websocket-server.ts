@@ -7,6 +7,14 @@ import {
   OnApplicationShutdown,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { AuthService } from "../auth/auth.service";
+import { extractBearerToken } from "../auth/jwt-auth.guard";
+import { CommunityChatService } from "../community-chat/community-chat.service";
+import {
+  CommunityMessageCreatedEvent,
+  CommunityOpinionSubmittedEvent,
+} from "../community-chat/dto/community-chat.dto";
+import { validateCommunityCommand } from "../community-chat/validators/community-chat.validator";
 import { RawData, WebSocket, WebSocketServer } from "ws";
 import {
   DEBATE_CHAT_ERROR_EVENT,
@@ -37,11 +45,14 @@ export class DebateChatWebSocketServer
 {
   private readonly logger = new Logger(DebateChatWebSocketServer.name);
   private readonly rooms = new Map<string, Set<WebSocket>>();
+  private readonly communityRooms = new Map<string, Set<WebSocket>>();
   private server: WebSocketServer | null = null;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly debateChatService: DebateChatService,
+    private readonly authService: AuthService,
+    private readonly communityChatService: CommunityChatService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -62,6 +73,46 @@ export class DebateChatWebSocketServer
     this.server?.close();
     this.server = null;
     this.rooms.clear();
+    this.communityRooms.clear();
+  }
+
+  publishDebateStarted(communityId: string, payload: object): void {
+    this.broadcastCommunity(communityId, {
+      id: randomUUID(),
+      type: "debate.started",
+      communityId,
+      ...payload,
+    });
+  }
+
+  publishTurnFinalized(
+    debateId: string,
+    turn: import("./dto/debate-chat.dto").DebateChatTurnDto,
+  ): void {
+    this.broadcast(debateId, {
+      id: randomUUID(),
+      type: DEBATE_TURN_FINALIZED_EVENT,
+      debateId,
+      turn,
+    });
+  }
+
+  publishDebateEnded(
+    communityId: string,
+    debateId: string,
+    status: string,
+    reason: string | null,
+  ): void {
+    const event: DebateChatServerEvent = {
+      id: randomUUID(),
+      type: "debate.ended",
+      communityId,
+      debateId,
+      status,
+      reason,
+    };
+    this.broadcast(debateId, event);
+    this.broadcastCommunity(communityId, event);
   }
 
   private async handleConnection(
@@ -69,6 +120,39 @@ export class DebateChatWebSocketServer
     request: IncomingMessage,
   ): Promise<void> {
     const debateId = parseDebateIdFromUrl(request.url);
+    const communityId = parseCommunityIdFromUrl(request.url);
+    const accessToken = extractBearerToken(request.headers.authorization);
+
+    if ((!debateId && !communityId) || !accessToken) {
+      socket.close(INVALID_CONNECTION_CLOSE_CODE, "Invalid chat path.");
+      return;
+    }
+
+    const pendingMessages: RawData[] = [];
+    const collectPendingMessage = (data: RawData) => {
+      if (pendingMessages.length < 20) pendingMessages.push(data);
+    };
+    socket.on("message", collectPendingMessage);
+
+    let memberId: string;
+    try {
+      memberId = (await this.authService.verifyAccessToken(accessToken))
+        .memberId;
+    } catch {
+      socket.close(INVALID_CONNECTION_CLOSE_CODE, "Unauthorized.");
+      return;
+    }
+
+    if (communityId) {
+      await this.handleCommunityConnection(
+        socket,
+        communityId,
+        memberId,
+        pendingMessages,
+        collectPendingMessage,
+      );
+      return;
+    }
 
     if (!debateId) {
       socket.close(INVALID_CONNECTION_CLOSE_CODE, "Invalid debate chat path.");
@@ -77,10 +161,15 @@ export class DebateChatWebSocketServer
 
     this.addToRoom(debateId, socket);
 
+    socket.off("message", collectPendingMessage);
     socket.on("message", (data) => {
-      void this.handleMessage(debateId, socket, data);
+      void this.handleMessage(debateId, memberId, socket, data);
     });
     socket.on("close", () => this.removeFromRoom(debateId, socket));
+
+    for (const data of pendingMessages) {
+      void this.handleMessage(debateId, memberId, socket, data);
+    }
 
     try {
       const snapshot =
@@ -98,8 +187,104 @@ export class DebateChatWebSocketServer
     }
   }
 
+  private async handleCommunityConnection(
+    socket: WebSocket,
+    communityId: string,
+    memberId: string,
+    pendingMessages: RawData[],
+    collectPendingMessage: (data: RawData) => void,
+  ): Promise<void> {
+    try {
+      await this.communityChatService.joinCommunity(communityId, memberId);
+    } catch (error) {
+      sendEvent(
+        socket,
+        createCommunityErrorEvent(communityId, undefined, error),
+      );
+      socket.close(INVALID_CONNECTION_CLOSE_CODE, "Community not found.");
+      return;
+    }
+
+    this.addToCommunityRoom(communityId, socket);
+    socket.off("message", collectPendingMessage);
+    socket.on("message", (data) => {
+      void this.handleCommunityMessage(communityId, memberId, socket, data);
+    });
+    socket.on("close", () => this.removeFromCommunityRoom(communityId, socket));
+
+    for (const data of pendingMessages) {
+      void this.handleCommunityMessage(communityId, memberId, socket, data);
+    }
+
+    try {
+      const messages = await this.communityChatService.listMessages(
+        communityId,
+        50,
+      );
+      for (const message of messages) {
+        sendEvent(socket, createCommunityMessageEvent(communityId, message));
+      }
+      const opinions =
+        await this.communityChatService.listOpinions(communityId);
+      for (const opinion of opinions) {
+        sendEvent(socket, createCommunityOpinionEvent(communityId, opinion));
+      }
+    } catch (error) {
+      sendEvent(
+        socket,
+        createCommunityErrorEvent(communityId, undefined, error),
+      );
+    }
+  }
+
+  private async handleCommunityMessage(
+    communityId: string,
+    memberId: string,
+    socket: WebSocket,
+    data: RawData,
+  ): Promise<void> {
+    let commandId: string | undefined;
+    try {
+      const raw: unknown = JSON.parse(rawDataToString(data));
+      const command = validateCommunityCommand(raw);
+      commandId = command.id;
+      if (command.type === "opinion.submit") {
+        const opinion = await this.communityChatService.saveOpinion(
+          communityId,
+          memberId,
+          { claim: command.claim, reasons: command.reasons },
+        );
+        this.broadcastCommunity(
+          communityId,
+          createCommunityOpinionEvent(communityId, opinion),
+        );
+        return;
+      }
+      const result = await this.communityChatService.sendMessage(
+        communityId,
+        memberId,
+        {
+          clientMessageId: command.clientMessageId,
+          text: command.text,
+        },
+      );
+      const event = createCommunityMessageEvent(communityId, result.message);
+      if (result.created) {
+        this.broadcastCommunity(communityId, event);
+      } else {
+        sendEvent(socket, event);
+      }
+    } catch (error) {
+      sendEvent(
+        socket,
+        createCommunityErrorEvent(communityId, commandId, error),
+      );
+    }
+  }
+
   private async handleMessage(
     debateId: string,
+    memberId: string,
     socket: WebSocket,
     data: RawData,
   ): Promise<void> {
@@ -108,6 +293,12 @@ export class DebateChatWebSocketServer
     try {
       const command = parseDebateChatCommand(rawDataToString(data));
       commandId = command.id;
+
+      if (command.payload.speakerId !== memberId) {
+        throw new DebateChatInputError(
+          "Authenticated member does not match payload.speakerId.",
+        );
+      }
 
       if (
         command.type === DEBATE_TURN_SEND_COMMAND ||
@@ -212,6 +403,33 @@ export class DebateChatWebSocketServer
       this.rooms.delete(debateId);
     }
   }
+
+  private broadcastCommunity(
+    communityId: string,
+    event: object,
+  ): void {
+    const room = this.communityRooms.get(communityId);
+    if (!room) return;
+    for (const socket of room) {
+      sendEvent(socket, event);
+    }
+  }
+
+  private addToCommunityRoom(communityId: string, socket: WebSocket): void {
+    const room = this.communityRooms.get(communityId) ?? new Set<WebSocket>();
+    room.add(socket);
+    this.communityRooms.set(communityId, room);
+  }
+
+  private removeFromCommunityRoom(
+    communityId: string,
+    socket: WebSocket,
+  ): void {
+    const room = this.communityRooms.get(communityId);
+    if (!room) return;
+    room.delete(socket);
+    if (room.size === 0) this.communityRooms.delete(communityId);
+  }
 }
 
 function parseDebateIdFromUrl(url: string | undefined): string | null {
@@ -222,6 +440,13 @@ function parseDebateIdFromUrl(url: string | undefined): string | null {
   const parsedUrl = new URL(url, "ws://localhost");
   const match = /^\/debates\/([^/]+)\/chat$/.exec(parsedUrl.pathname);
 
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function parseCommunityIdFromUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  const parsedUrl = new URL(url, "ws://localhost");
+  const match = /^\/communities\/([^/]+)\/chat$/.exec(parsedUrl.pathname);
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
@@ -237,12 +462,50 @@ function rawDataToString(data: RawData): string {
   return data.toString("utf8");
 }
 
-function sendEvent(socket: WebSocket, event: DebateChatServerEvent): void {
+function sendEvent(socket: WebSocket, event: object): void {
   if (socket.readyState !== WebSocket.OPEN) {
     return;
   }
 
   socket.send(JSON.stringify(event));
+}
+
+function createCommunityMessageEvent(
+  communityId: string,
+  message: CommunityMessageCreatedEvent["message"],
+): CommunityMessageCreatedEvent {
+  return {
+    id: randomUUID(),
+    type: "message.created",
+    communityId,
+    message,
+  };
+}
+
+function createCommunityOpinionEvent(
+  communityId: string,
+  opinion: CommunityOpinionSubmittedEvent["opinion"],
+): CommunityOpinionSubmittedEvent {
+  return {
+    id: randomUUID(),
+    type: "opinion.submitted",
+    communityId,
+    opinion,
+  };
+}
+
+function createCommunityErrorEvent(
+  communityId: string,
+  commandId: string | undefined,
+  error: unknown,
+): object {
+  return {
+    id: randomUUID(),
+    type: "error",
+    communityId,
+    ...(commandId ? { commandId } : {}),
+    message: error instanceof Error ? error.message : "Unexpected chat error.",
+  };
 }
 
 function createErrorEvent(

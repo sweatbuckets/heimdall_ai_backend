@@ -30,6 +30,17 @@ export class AnalyzerQueueService {
     return String(job.id);
   }
 
+  async cancelAnalyzeTurn(turnId: string): Promise<void> {
+    const job = await this.analyzerQueue.getJob(
+      `${ANALYZE_TURN_JOB}-${turnId}`,
+    );
+    if (!job) return;
+    const state = await job.getState();
+    if (state !== "active" && state !== "completed") {
+      await job.remove();
+    }
+  }
+
   private async enqueue(turnId: string, jobId: string): Promise<string> {
     const job = await this.analyzerQueue.add(
       ANALYZE_TURN_JOB,

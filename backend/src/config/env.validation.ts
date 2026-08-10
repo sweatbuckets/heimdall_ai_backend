@@ -15,6 +15,11 @@ export const envValidationSchema = Joi.object({
   REDIS_PORT: Joi.number().port().default(6379),
   REDIS_PASSWORD: Joi.string().allow("").optional(),
 
+  JWT_ACCESS_SECRET: Joi.string().min(32).required(),
+  JWT_REFRESH_SECRET: Joi.string().min(32).required(),
+  JWT_ACCESS_TTL_SECONDS: Joi.number().integer().min(60).default(900),
+  JWT_REFRESH_TTL_SECONDS: Joi.number().integer().min(300).default(2592000),
+
   GEMINI_API_KEY: Joi.string().allow("").optional(),
   GEMINI_ANALYZER_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_FACT_CHECKER_MODEL: Joi.string().default("gemini-3.5-flash"),

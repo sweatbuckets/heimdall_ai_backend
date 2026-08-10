@@ -12,6 +12,7 @@ export function validateCreateDebateRequest(
   }
 
   const topic = readRequiredString(body, "topic");
+  const communityId = readRequiredString(body, "communityId");
   const sideASpeakerId = readRequiredString(body, "sideASpeakerId");
   const sideBSpeakerId = readRequiredString(body, "sideBSpeakerId");
   const rebuttalQuestionRounds = readPositiveInteger(
@@ -27,6 +28,7 @@ export function validateCreateDebateRequest(
 
   assertUuid(sideASpeakerId, "sideASpeakerId");
   assertUuid(sideBSpeakerId, "sideBSpeakerId");
+  assertUuid(communityId, "communityId");
 
   if (sideASpeakerId === sideBSpeakerId) {
     throw new BadRequestException(
@@ -35,6 +37,7 @@ export function validateCreateDebateRequest(
   }
 
   return {
+    communityId,
     topic,
     sideASpeakerId,
     sideBSpeakerId,

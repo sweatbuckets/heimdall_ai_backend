@@ -14,6 +14,12 @@ import { JudgeConflictError } from "./errors/judge.errors";
 import { DebateStatus } from "../debates/domain/debate.enums";
 import { DebateEntity } from "../debates/entities/debate.entity";
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
+import {
+  AiInvocationCancellationService,
+  AiInvocationCancelledError,
+} from "../ai/ai-invocation-cancellation.service";
+import { CommunityEntity } from "../community-chat/entities/community.entity";
+import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
 
 export interface JudgeDebateResult {
   debateId: string;
@@ -27,6 +33,7 @@ export class JudgeService {
     private readonly judgeInputAssembler: JudgeInputAssembler,
     private readonly judgeAiService: JudgeAiService,
     private readonly configService: ConfigService,
+    private readonly aiCancellationService: AiInvocationCancellationService,
   ) {}
 
   async judgeDebate(debateId: string): Promise<JudgeDebateResult> {
@@ -34,7 +41,10 @@ export class JudgeService {
 
     validateJudgeInput(assembled.input, assembled.validationContext);
 
-    const output = await this.judgeAiService.judge(assembled.input);
+    const output = await this.aiCancellationService.run(
+      debateId,
+      (signal) => this.judgeAiService.judge(assembled.input, signal),
+    );
     validateJudgeOutput(output, {
       maxOverallReasonLength: this.configService.get<number>(
         "JUDGE_MAX_OVERALL_REASON_LENGTH",
@@ -53,6 +63,14 @@ export class JudgeService {
     );
 
     await this.dataSource.transaction(async (manager) => {
+      const debate = await manager.findOne(DebateEntity, {
+        where: { id: debateId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!debate || debate.status === DebateStatus.FAILED) {
+        throw new AiInvocationCancelledError(debateId);
+      }
+
       await manager.insert(JudgmentResultEntity, judgmentResult);
 
       const updateResult = await manager
@@ -72,6 +90,11 @@ export class JudgeService {
           `Debate could not be completed from JUDGING: ${debateId}.`,
         );
       }
+      await manager.update(
+        CommunityEntity,
+        { id: debate.communityId },
+        { status: CommunityStatus.WAITING },
+      );
     });
 
     if (!judgmentResult.id) {

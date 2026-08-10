@@ -11,6 +11,8 @@ import { FactCheckModule } from "./fact-check/fact-check.module";
 import { JudgeModule } from "./judge/judge.module";
 import { DebateChatModule } from "./debate-chat/debate-chat.module";
 import { MembersModule } from "./members/members.module";
+import { AuthModule } from "./auth/auth.module";
+import { CommunityChatModule } from "./community-chat/community-chat.module";
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { MembersModule } from "./members/members.module";
       },
     }),
     MembersModule,
+    AuthModule,
+    CommunityChatModule,
     DebatesModule,
     AnalyzerModule,
     FactCheckModule,

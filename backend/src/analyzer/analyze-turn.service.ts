@@ -24,6 +24,7 @@ import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
 import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
 import { FactCheckBatchTargetEntity } from "../debates/entities/fact-check-batch-target.entity";
 import {
+  DebateStatus,
   DebateTurnAnalysisStatus,
   FactCheckBatchTaskStatus,
 } from "../debates/domain/debate.enums";
@@ -35,6 +36,11 @@ import {
 } from "../fact-check/queues/fact-check.constants";
 import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
 import { JudgeReadinessService } from "../judge/judge-readiness.service";
+import {
+  AiInvocationCancellationService,
+  AiInvocationCancelledError,
+} from "../ai/ai-invocation-cancellation.service";
+import { DebateEntity } from "../debates/entities/debate.entity";
 
 export interface AnalyzeTurnResult {
   turnId: string;
@@ -55,6 +61,7 @@ export class AnalyzeTurnService {
     @InjectQueue(FACT_CHECK_QUEUE)
     private readonly factCheckQueue: Queue<FactCheckJobData>,
     private readonly judgeReadinessService: JudgeReadinessService,
+    private readonly aiCancellationService: AiInvocationCancellationService,
   ) {}
 
   async analyzeTurn(
@@ -69,7 +76,10 @@ export class AnalyzeTurnService {
 
     try {
       const input = await this.analyzerInputAssembler.assemble(turnId);
-      const output = await this.analyzerAiService.analyze(input);
+      const output = await this.aiCancellationService.run(
+        input.debate.id,
+        (signal) => this.analyzerAiService.analyze(input, signal),
+      );
       const limits = this.getValidationLimits();
       validateAnalyzeTurnOutput(input, output, limits);
 
@@ -77,6 +87,14 @@ export class AnalyzeTurnService {
       let factCheckBatchTaskId: string | null = null;
 
       await this.dataSource.transaction(async (manager) => {
+        const debate = await manager.findOne(DebateEntity, {
+          where: { id: input.debate.id },
+          lock: { mode: "pessimistic_read" },
+        });
+        if (!debate || debate.status === DebateStatus.FAILED) {
+          throw new AiInvocationCancelledError(input.debate.id);
+        }
+
         if (mapping.components.length > 0) {
           await manager.insert(ArgumentComponentEntity, mapping.components);
         }
@@ -149,6 +167,16 @@ export class AnalyzeTurnService {
       };
     } catch (error) {
       await this.releaseOrFailTurnAnalysis(turnId, job);
+      if (error instanceof AiInvocationCancelledError) {
+        return {
+          turnId,
+          componentCount: 0,
+          argumentalRelationCount: 0,
+          interactionalRelationCount: 0,
+          factCheckBatchTaskId: null,
+          skipped: true,
+        };
+      }
       throw error;
     }
   }

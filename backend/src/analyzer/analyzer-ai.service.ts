@@ -70,7 +70,10 @@ export class AnalyzerAiService {
     private readonly configService: ConfigService,
   ) {}
 
-  async analyze(input: AnalyzeTurnInput): Promise<AnalyzeTurnOutput> {
+  async analyze(
+    input: AnalyzeTurnInput,
+    abortSignal?: AbortSignal,
+  ): Promise<AnalyzeTurnOutput> {
     assertGeminiApiKey(this.configService);
 
     const model = this.configService.getOrThrow<string>(
@@ -90,6 +93,7 @@ export class AnalyzerAiService {
       input,
       maxRetries,
       timeoutMs,
+      abortSignal,
     );
     validateAnalyzeTurnOutput(input, output);
 
@@ -101,17 +105,19 @@ export class AnalyzerAiService {
     input: AnalyzeTurnInput,
     maxRetries: number,
     timeoutMs: number,
+    abortSignal?: AbortSignal,
   ): Promise<AnalyzeTurnOutput> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         return await withTimeout(
-          this.generate(model, input),
+          this.generate(model, input, abortSignal),
           timeoutMs,
           "Gemini analyzer request timed out.",
         );
       } catch (error) {
+        if (abortSignal?.aborted) throw error;
         lastError = error;
 
         if (attempt === maxRetries) {
@@ -126,6 +132,7 @@ export class AnalyzerAiService {
   private async generate(
     model: string,
     input: AnalyzeTurnInput,
+    abortSignal?: AbortSignal,
   ): Promise<AnalyzeTurnOutput> {
     const response = await this.gemini.models.generateContent({
       model,
@@ -140,6 +147,7 @@ export class AnalyzerAiService {
         },
       ],
       config: {
+        abortSignal,
         systemInstruction: ANALYZER_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: ANALYZE_TURN_RESPONSE_SCHEMA,

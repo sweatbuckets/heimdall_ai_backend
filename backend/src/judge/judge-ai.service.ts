@@ -28,7 +28,10 @@ export class JudgeAiService {
     private readonly configService: ConfigService,
   ) {}
 
-  async judge(input: JudgeInput): Promise<JudgeOutput> {
+  async judge(
+    input: JudgeInput,
+    abortSignal?: AbortSignal,
+  ): Promise<JudgeOutput> {
     assertGeminiApiKey(this.configService);
 
     const model = this.configService.getOrThrow<string>("GEMINI_JUDGE_MODEL");
@@ -45,6 +48,7 @@ export class JudgeAiService {
       input,
       maxRetries,
       timeoutMs,
+      abortSignal,
     );
 
     validateJudgeOutput(output, {
@@ -66,17 +70,19 @@ export class JudgeAiService {
     input: JudgeInput,
     maxRetries: number,
     timeoutMs: number,
+    abortSignal?: AbortSignal,
   ): Promise<JudgeOutput> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         return await withTimeout(
-          this.generate(model, input),
+          this.generate(model, input, abortSignal),
           timeoutMs,
           "Gemini judge request timed out.",
         );
       } catch (error) {
+        if (abortSignal?.aborted) throw error;
         lastError = error;
 
         if (attempt === maxRetries) {
@@ -91,6 +97,7 @@ export class JudgeAiService {
   private async generate(
     model: string,
     input: JudgeInput,
+    abortSignal?: AbortSignal,
   ): Promise<JudgeOutput> {
     const response = await this.gemini.models.generateContent({
       model,
@@ -105,6 +112,7 @@ export class JudgeAiService {
         },
       ],
       config: {
+        abortSignal,
         systemInstruction: JUDGE_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: JUDGE_RESPONSE_SCHEMA,

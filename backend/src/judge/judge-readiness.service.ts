@@ -13,6 +13,7 @@ import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-t
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
 import { JudgeService } from "./judge.service";
 import { DEFAULT_JUDGE_PROCESSING_STALE_MS } from "./constants";
+import { AiInvocationCancelledError } from "../ai/ai-invocation-cancellation.service";
 
 @Injectable()
 export class JudgeReadinessService {
@@ -154,6 +155,11 @@ export class JudgeReadinessService {
   }
 
   private async executeClaimedJudge(debateId: string): Promise<void> {
-    await this.judgeService.judgeDebate(debateId);
+    try {
+      await this.judgeService.judgeDebate(debateId);
+    } catch (error) {
+      if (error instanceof AiInvocationCancelledError) return;
+      throw error;
+    }
   }
 }

@@ -10,11 +10,23 @@ import { FactCheckResultEntity } from "../debates/entities/fact-check-result.ent
 import { FactCheckSourceEntity } from "../debates/entities/fact-check-source.entity";
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
 import { MemberEntity } from "../members/entities/member.entity";
+import { DebateTurnVoteEntity } from "../debates/entities/debate-turn-vote.entity";
+import { RefreshTokenSessionEntity } from "../auth/entities/refresh-token-session.entity";
+import { CommunityEntity } from "../community-chat/entities/community.entity";
+import { CommunityMemberEntity } from "../community-chat/entities/community-member.entity";
+import { CommunityMessageEntity } from "../community-chat/entities/community-message.entity";
+import { CommunityOpinionEntity } from "../community-chat/entities/community-opinion.entity";
 
 export const debateEntities = [
   MemberEntity,
+  RefreshTokenSessionEntity,
+  CommunityEntity,
+  CommunityMemberEntity,
+  CommunityMessageEntity,
+  CommunityOpinionEntity,
   DebateEntity,
   DebateTurnEntity,
+  DebateTurnVoteEntity,
   ArgumentComponentEntity,
   ArgumentalRelationEntity,
   InteractionalRelationEntity,

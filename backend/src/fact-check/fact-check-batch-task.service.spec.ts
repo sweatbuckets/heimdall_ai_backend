@@ -7,6 +7,7 @@ import { FactCheckerAiService } from "./fact-checker-ai.service";
 import { FactCheckInputAssembler } from "./fact-check-input.assembler";
 import { FactCheckBatchTaskService } from "./fact-check-batch-task.service";
 import { JudgeReadinessService } from "../judge/judge-readiness.service";
+import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -109,6 +110,7 @@ describe("FactCheckBatchTaskService", () => {
         {
           tryStartJudge: jest.fn().mockResolvedValue(undefined),
         } as unknown as JudgeReadinessService,
+        new AiInvocationCancellationService(),
       ),
       assembler,
       aiService,
