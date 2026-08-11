@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   DefaultValuePipe,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -61,6 +62,15 @@ export class CommunityChatController {
     @CurrentMember() principal: AuthPrincipal,
   ): Promise<void> {
     return this.service.joinCommunity(communityId, principal.memberId);
+  }
+
+  @Delete(":communityId/members/me")
+  @HttpCode(204)
+  leave(
+    @Param("communityId") communityId: string,
+    @CurrentMember() principal: AuthPrincipal,
+  ): Promise<void> {
+    return this.service.leaveCommunity(communityId, principal.memberId);
   }
 
   @Get(":communityId/members")

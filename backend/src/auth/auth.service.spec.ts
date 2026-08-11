@@ -15,6 +15,7 @@ describe("AuthService", () => {
     profileImageUrl: null,
     gender: null,
     age: null,
+    score: 0,
     createdAt: "2026-08-02T00:00:00.000Z",
     updatedAt: "2026-08-02T00:00:00.000Z",
   };

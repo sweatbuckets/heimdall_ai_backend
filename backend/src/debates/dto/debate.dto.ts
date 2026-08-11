@@ -40,6 +40,7 @@ export interface DebateSpeakerDto {
   id: string;
   displayName: string;
   profileImageUrl: string | null;
+  score: number;
 }
 
 export interface StartCommunityDebateRequest {

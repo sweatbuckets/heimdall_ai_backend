@@ -10,6 +10,7 @@ import {
 } from "typeorm";
 import { MemberEntity } from "../../members/entities/member.entity";
 import { CommunityEntity } from "./community.entity";
+import { CommunityMemberEntity } from "./community-member.entity";
 
 @Entity("community_opinion")
 @Unique("uq_community_opinion_author", ["communityId", "authorId"])
@@ -41,7 +42,16 @@ export class CommunityOpinionEntity {
   @JoinColumn({ name: "community_id" })
   community: CommunityEntity;
 
-  @ManyToOne(() => MemberEntity, { onDelete: "CASCADE" })
+  @ManyToOne(() => CommunityMemberEntity, (membership) => membership.opinions, {
+    onDelete: "CASCADE",
+  })
+  @JoinColumn([
+    { name: "community_id", referencedColumnName: "communityId" },
+    { name: "author_id", referencedColumnName: "memberId" },
+  ])
+  membership: CommunityMemberEntity;
+
+  @ManyToOne(() => MemberEntity, { createForeignKeyConstraints: false })
   @JoinColumn({ name: "author_id" })
   author: MemberEntity;
 }

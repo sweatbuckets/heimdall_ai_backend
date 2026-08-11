@@ -29,6 +29,7 @@ export interface MemberDto {
   profileImageUrl: string | null;
   gender: string | null;
   age: number | null;
+  score: number;
   createdAt: string;
   updatedAt: string;
 }

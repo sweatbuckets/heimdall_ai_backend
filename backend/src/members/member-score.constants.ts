@@ -1,0 +1,1 @@
+export const DEBATE_WIN_SCORE_REWARD = 20;

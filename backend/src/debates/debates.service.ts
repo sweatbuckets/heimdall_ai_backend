@@ -128,14 +128,18 @@ export class DebatesService {
         throw new NotFoundException(`Community not found: ${communityId}.`);
       }
       if (community.hostId !== hostMemberId) {
-        throw new ConflictException("Only the community host can start a debate.");
+        throw new ConflictException(
+          "Only the community host can start a debate.",
+        );
       }
 
       const opponentJoined = await manager.exists(CommunityMemberEntity, {
         where: { communityId, memberId: opponentMemberId },
       });
       if (!opponentJoined) {
-        throw new BadRequestException("The opponent must be a community member.");
+        throw new BadRequestException(
+          "The opponent must be a community member.",
+        );
       }
 
       const activeStatuses = [
@@ -176,7 +180,9 @@ export class DebatesService {
           }
           return { debateId: existing.id, created: false };
         }
-        throw new ConflictException("This community already has an active debate.");
+        throw new ConflictException(
+          "This community already has an active debate.",
+        );
       }
 
       const now = new Date();
@@ -549,10 +555,12 @@ function mapSpeaker(member: MemberEntity): {
   id: string;
   displayName: string;
   profileImageUrl: string | null;
+  score: number;
 } {
   return {
     id: member.id,
     displayName: member.displayName,
     profileImageUrl: member.profileImageUrl,
+    score: member.score,
   };
 }
