@@ -13,7 +13,7 @@
 ## Core Features
 
 <p align="center">
-  <img src="./backend/readme_img/ai-pipeline3.png" alt="AI Analysis Pipeline" width="400" />
+  <img src="./backend/readme_img/ai-pipeline4.png" alt="AI Analysis Pipeline" width="400" />
 </p>
 
 채팅 메시지는 Redis Draft Buffer에서 턴 단위 발언으로 확정되고, 확정된 `DebateTurn`은 Analyzer와 Fact Checker를 거칩니다. Analyzer와 Fact Checker는 완료 후 공통 readiness 검사를 호출하며, 전체 DB 상태가 준비된 한 요청만 `DEBATE_FINALIZED → JUDGING`을 선점해 Judge API를 직접 실행합니다. Judge에는 별도 BullMQ Queue나 Task 테이블이 없습니다. 각 단계의 Gemini 응답은 프롬프트와 `responseSchema`로 형태를 제한하고, 저장 전 백엔드 Validator로 다시 검증합니다.
