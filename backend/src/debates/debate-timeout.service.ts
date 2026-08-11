@@ -1,5 +1,11 @@
 import { InjectQueue } from "@nestjs/bullmq";
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { Queue } from "bullmq";
 import { DataSource, In, LessThanOrEqual } from "typeorm";
@@ -19,9 +25,19 @@ import { DebateEntity } from "./entities/debate.entity";
 import { DebateTurnEntity } from "./entities/debate-turn.entity";
 import { FactCheckBatchTaskEntity } from "./entities/fact-check-batch-task.entity";
 import { DEBATE_TOTAL_DURATION_MS } from "./debate-timeout.constants";
+import { MemberEntity } from "../members/entities/member.entity";
+import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
 
 const TIMEOUT_POLL_INTERVAL_MS = 2_000;
 const TIMEOUT_BATCH_SIZE = 20;
+
+interface TerminateDebateOptions {
+  allowedStatuses: DebateStatus[];
+  eventReason: "TOTAL_TIME_EXPIRED" | "FORFEITED";
+  taskFailureReason: string;
+  requireExpired: boolean;
+  forfeitingMemberId?: string;
+}
 
 @Injectable()
 export class DebateTimeoutService {
@@ -75,20 +91,63 @@ export class DebateTimeoutService {
   }
 
   async expireDebate(debateId: string): Promise<boolean> {
+    return this.terminateDebate(debateId, {
+      allowedStatuses: [
+        DebateStatus.IN_PROGRESS,
+        DebateStatus.DEBATE_FINALIZED,
+        DebateStatus.JUDGING,
+      ],
+      eventReason: "TOTAL_TIME_EXPIRED",
+      taskFailureReason: "Debate total time limit expired.",
+      requireExpired: true,
+    });
+  }
+
+  async forfeitDebate(debateId: string, memberId: string): Promise<void> {
+    const terminated = await this.terminateDebate(debateId, {
+      allowedStatuses: [DebateStatus.IN_PROGRESS],
+      eventReason: "FORFEITED",
+      taskFailureReason: "Debate was forfeited.",
+      requireExpired: false,
+      forfeitingMemberId: memberId,
+    });
+    if (!terminated) {
+      throw new ConflictException(
+        "Only an in-progress debate can be forfeited.",
+      );
+    }
+  }
+
+  private async terminateDebate(
+    debateId: string,
+    options: TerminateDebateOptions,
+  ): Promise<boolean> {
     const claimed = await this.dataSource.transaction(async (manager) => {
       const debate = await manager.findOne(DebateEntity, {
         where: { id: debateId },
         lock: { mode: "pessimistic_write" },
       });
+
+      if (!debate) {
+        if (options.forfeitingMemberId) {
+          throw new NotFoundException(`Debate not found: ${debateId}.`);
+        }
+        return null;
+      }
+
       if (
-        !debate ||
-        ![
-          DebateStatus.IN_PROGRESS,
-          DebateStatus.DEBATE_FINALIZED,
-          DebateStatus.JUDGING,
-        ].includes(debate.status) ||
-        !debate.startedAt ||
-        Date.now() < debate.startedAt.getTime() + DEBATE_TOTAL_DURATION_MS
+        options.forfeitingMemberId &&
+        debate.sideASpeakerId !== options.forfeitingMemberId &&
+        debate.sideBSpeakerId !== options.forfeitingMemberId
+      ) {
+        throw new ForbiddenException("Only a debate participant can forfeit.");
+      }
+
+      if (
+        !options.allowedStatuses.includes(debate.status) ||
+        (options.requireExpired &&
+          (!debate.startedAt ||
+            Date.now() < debate.startedAt.getTime() + DEBATE_TOTAL_DURATION_MS))
       ) {
         return null;
       }
@@ -111,11 +170,7 @@ export class DebateTimeoutService {
         DebateEntity,
         {
           id: debateId,
-          status: In([
-            DebateStatus.IN_PROGRESS,
-            DebateStatus.DEBATE_FINALIZED,
-            DebateStatus.JUDGING,
-          ]),
+          status: In(options.allowedStatuses),
         },
         {
           status: DebateStatus.FAILED,
@@ -152,7 +207,7 @@ export class DebateTimeoutService {
           },
           {
             status: FactCheckBatchTaskStatus.FAILED,
-            failureReason: "Debate total time limit expired.",
+            failureReason: options.taskFailureReason,
           },
         );
       }
@@ -161,6 +216,23 @@ export class DebateTimeoutService {
         { id: debate.communityId },
         { status: CommunityStatus.WAITING },
       );
+      if (options.forfeitingMemberId) {
+        const winnerMemberId =
+          debate.sideASpeakerId === options.forfeitingMemberId
+            ? debate.sideBSpeakerId
+            : debate.sideASpeakerId;
+        const scoreResult = await manager.increment(
+          MemberEntity,
+          { id: winnerMemberId },
+          "score",
+          DEBATE_WIN_SCORE_REWARD,
+        );
+        if (scoreResult.affected !== 1) {
+          throw new Error(
+            `Forfeit winner score update failed: ${winnerMemberId}.`,
+          );
+        }
+      }
 
       return {
         communityId: debate.communityId,
@@ -183,7 +255,7 @@ export class DebateTimeoutService {
       claimed.communityId,
       debateId,
       DebateStatus.FAILED,
-      "TOTAL_TIME_EXPIRED",
+      options.eventReason,
     );
     return true;
   }

@@ -5,6 +5,7 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryColumn,
+  OneToMany,
 } from "typeorm";
 import { MemberEntity } from "../../members/entities/member.entity";
 import {
@@ -12,6 +13,7 @@ import {
   CommunityMemberRole,
 } from "../domain/community-chat.enums";
 import { CommunityEntity } from "./community.entity";
+import { CommunityOpinionEntity } from "./community-opinion.entity";
 
 @Entity("community_member")
 export class CommunityMemberEntity {
@@ -44,4 +46,7 @@ export class CommunityMemberEntity {
   @ManyToOne(() => MemberEntity, { onDelete: "CASCADE" })
   @JoinColumn({ name: "member_id" })
   member: MemberEntity;
+
+  @OneToMany(() => CommunityOpinionEntity, (opinion) => opinion.membership)
+  opinions: CommunityOpinionEntity[];
 }

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { DataSource, In, LessThan } from "typeorm";
 import {
   CommunityDebateIntent,
@@ -107,6 +112,27 @@ export class CommunityChatService {
     );
   }
 
+  async leaveCommunity(communityId: string, memberId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const membership = await manager.findOne(CommunityMemberEntity, {
+        where: { communityId, memberId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!membership) {
+        throw new NotFoundException(
+          `Community member not found: ${communityId}/${memberId}.`,
+        );
+      }
+      if (membership.role === CommunityMemberRole.HOST) {
+        throw new ConflictException(
+          "The community host cannot leave the community.",
+        );
+      }
+
+      await manager.delete(CommunityMemberEntity, { communityId, memberId });
+    });
+  }
+
   async listCommunityMembers(
     communityId: string,
   ): Promise<CommunityMemberDto[]> {
@@ -176,6 +202,14 @@ export class CommunityChatService {
     input: SendCommunityMessageRequest,
   ): Promise<{ message: CommunityMessageDto; created: boolean }> {
     await this.joinCommunity(communityId, memberId);
+    const hasOpinion = await this.dataSource
+      .getRepository(CommunityOpinionEntity)
+      .exist({ where: { communityId, authorId: memberId } });
+    if (!hasOpinion) {
+      throw new ForbiddenException(
+        "A community opinion is required before sending messages.",
+      );
+    }
     const repository = this.dataSource.getRepository(CommunityMessageEntity);
     const insert = await repository
       .createQueryBuilder()

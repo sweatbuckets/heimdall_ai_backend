@@ -40,6 +40,9 @@ export class MemberEntity {
   @Column({ type: "int", nullable: true })
   age: number | null;
 
+  @Column({ type: "int", default: 0 })
+  score: number;
+
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;
 

@@ -169,6 +169,7 @@ function mapMemberToDto(member: MemberEntity): MemberDto {
     profileImageUrl: member.profileImageUrl,
     gender: member.gender,
     age: member.age,
+    score: member.score,
     createdAt: member.createdAt.toISOString(),
     updatedAt: member.updatedAt.toISOString(),
   };

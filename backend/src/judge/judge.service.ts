@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { DataSource } from "typeorm";
+import { DataSource, EntityManager } from "typeorm";
 import {
   DEFAULT_MAX_JUDGE_FEEDBACK_LENGTH,
   DEFAULT_MAX_JUDGE_OVERALL_REASON_LENGTH,
@@ -11,7 +11,7 @@ import { mapJudgeOutputToJudgmentResult } from "./mappers/judgment-result.mapper
 import { validateJudgeInput } from "./validators/judge-input.validator";
 import { validateJudgeOutput } from "./validators/judge-output.validator";
 import { JudgeConflictError } from "./errors/judge.errors";
-import { DebateStatus } from "../debates/domain/debate.enums";
+import { DebateStatus, JudgmentWinner } from "../debates/domain/debate.enums";
 import { DebateEntity } from "../debates/entities/debate.entity";
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
 import {
@@ -20,6 +20,8 @@ import {
 } from "../ai/ai-invocation-cancellation.service";
 import { CommunityEntity } from "../community-chat/entities/community.entity";
 import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
+import { MemberEntity } from "../members/entities/member.entity";
+import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
 
 export interface JudgeDebateResult {
   debateId: string;
@@ -41,9 +43,8 @@ export class JudgeService {
 
     validateJudgeInput(assembled.input, assembled.validationContext);
 
-    const output = await this.aiCancellationService.run(
-      debateId,
-      (signal) => this.judgeAiService.judge(assembled.input, signal),
+    const output = await this.aiCancellationService.run(debateId, (signal) =>
+      this.judgeAiService.judge(assembled.input, signal),
     );
     validateJudgeOutput(output, {
       maxOverallReasonLength: this.configService.get<number>(
@@ -90,6 +91,10 @@ export class JudgeService {
           `Debate could not be completed from JUDGING: ${debateId}.`,
         );
       }
+      if (!judgmentResult.winner) {
+        throw new JudgeConflictError("Judgment winner was not generated.");
+      }
+      await this.awardWinnerScore(manager, debate, judgmentResult.winner);
       await manager.update(
         CommunityEntity,
         { id: debate.communityId },
@@ -105,5 +110,31 @@ export class JudgeService {
       debateId,
       judgmentResultId: judgmentResult.id,
     };
+  }
+
+  private async awardWinnerScore(
+    manager: EntityManager,
+    debate: DebateEntity,
+    winner: JudgmentWinner,
+  ): Promise<void> {
+    const winnerMemberId =
+      winner === JudgmentWinner.SIDE_A
+        ? debate.sideASpeakerId
+        : winner === JudgmentWinner.SIDE_B
+          ? debate.sideBSpeakerId
+          : null;
+    if (!winnerMemberId) return;
+
+    const result = await manager.increment(
+      MemberEntity,
+      { id: winnerMemberId },
+      "score",
+      DEBATE_WIN_SCORE_REWARD,
+    );
+    if (result.affected !== 1) {
+      throw new JudgeConflictError(
+        `Winner score could not be updated: ${winnerMemberId}.`,
+      );
+    }
   }
 }

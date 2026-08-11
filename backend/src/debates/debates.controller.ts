@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Post,
   Put,
@@ -19,12 +20,16 @@ import {
 } from "./dto/debate-turn-vote.dto";
 import { DebateDetailDto, DebateDto, DebateResultDto } from "./dto/debate.dto";
 import { DebatesService } from "./debates.service";
+import { DebateTimeoutService } from "./debate-timeout.service";
 import { validateCreateDebateRequest } from "./validators/create-debate.validator";
 import { validateSetDebateTurnVoteRequest } from "./validators/debate-turn-vote.validator";
 
 @Controller("debates")
 export class DebatesController {
-  constructor(private readonly debatesService: DebatesService) {}
+  constructor(
+    private readonly debatesService: DebatesService,
+    private readonly debateTimeoutService: DebateTimeoutService,
+  ) {}
 
   @Post()
   async createDebate(@Body() body: unknown): Promise<DebateDto> {
@@ -105,6 +110,16 @@ export class DebatesController {
     assertUuid(debateId, "debateId");
 
     return this.debatesService.startDebate(debateId);
+  }
+
+  @Post(":debateId/forfeit")
+  @HttpCode(204)
+  async forfeitDebate(
+    @Param("debateId") debateId: string,
+    @CurrentMember() principal: AuthPrincipal,
+  ): Promise<void> {
+    assertUuid(debateId, "debateId");
+    await this.debateTimeoutService.forfeitDebate(debateId, principal.memberId);
   }
 
   @Post(":debateId/judging")

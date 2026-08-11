@@ -45,6 +45,11 @@ class MockUpdateQueryBuilder {
 
 class MockEntityManager {
   public readonly insertedValues: unknown[] = [];
+  public readonly increments: Array<{
+    criteria: object;
+    propertyPath: string;
+    value: number;
+  }> = [];
 
   constructor(private readonly updateAffected: number) {}
 
@@ -57,7 +62,19 @@ class MockEntityManager {
       id: "debate-1",
       communityId: "community-1",
       status: DebateStatus.JUDGING,
+      sideASpeakerId: "speaker-a",
+      sideBSpeakerId: "speaker-b",
     };
+  }
+
+  async increment(
+    _entity: unknown,
+    criteria: object,
+    propertyPath: string,
+    value: number,
+  ): Promise<UpdateExecutionResult> {
+    this.increments.push({ criteria, propertyPath, value });
+    return { affected: 1 };
   }
 
   async update(
@@ -202,7 +219,29 @@ describe("JudgeService", () => {
       sideATotalScore: 78,
       sideBTotalScore: 69,
     });
+    expect(dataSource.manager.increments).toEqual([
+      {
+        criteria: { id: "speaker-a" },
+        propertyPath: "score",
+        value: 20,
+      },
+    ]);
     expect(result.debateId).toBe("debate-1");
+  });
+
+  it("does not award score when the judgment is a draw", async () => {
+    const dataSource = new MockDataSource(1);
+    const { service, aiService } = createService(dataSource);
+    aiService.judge.mockResolvedValue({
+      ...output,
+      sideBArgumentationScore: 33,
+      sideBInteractionScore: 24,
+      sideBFactualReliabilityScore: 21,
+    });
+
+    await service.judgeDebate("debate-1");
+
+    expect(dataSource.manager.increments).toHaveLength(0);
   });
 
   it("prevents duplicate JudgmentResult execution before AI call", async () => {

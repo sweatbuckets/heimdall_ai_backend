@@ -24,6 +24,8 @@ import { BackfillCommunityHostOpinions20260810000001 } from "../migrations/20260
 import { ConnectDebateToCommunity20260810000002 } from "../migrations/20260810000002-ConnectDebateToCommunity";
 import { SeedAliceBobCommunityContent20260810000003 } from "../migrations/20260810000003-SeedAliceBobCommunityContent";
 import { AddDebateTimeoutIndex20260810000004 } from "../migrations/20260810000004-AddDebateTimeoutIndex";
+import { LinkCommunityOpinionToMembership20260811000000 } from "../migrations/20260811000000-LinkCommunityOpinionToMembership";
+import { AddMemberScore20260811000001 } from "../migrations/20260811000001-AddMemberScore";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -60,6 +62,8 @@ const AppDataSource = new DataSource({
     ConnectDebateToCommunity20260810000002,
     SeedAliceBobCommunityContent20260810000003,
     AddDebateTimeoutIndex20260810000004,
+    LinkCommunityOpinionToMembership20260811000000,
+    AddMemberScore20260811000001,
   ],
   migrationsTableName: "migrations",
   synchronize: false,
