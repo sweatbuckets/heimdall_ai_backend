@@ -1,5 +1,15 @@
 import { CommunityStatus } from "../domain/community-chat.enums";
 import { CommunityDebateIntent } from "../domain/community-chat.enums";
+import { CommunityMessageType } from "../entities/community-message.entity";
+
+export const COMMUNITY_MESSAGE_ACK_EVENT = "community.message.ack";
+export const COMMUNITY_OPINION_ACK_EVENT = "community.opinion.ack";
+export const COMMUNITY_COMMAND_STATUS_STORED = "STORED";
+export const COMMUNITY_COMMAND_STATUS_DUPLICATE = "DUPLICATE";
+
+export type CommunityCommandStatus =
+  | typeof COMMUNITY_COMMAND_STATUS_STORED
+  | typeof COMMUNITY_COMMAND_STATUS_DUPLICATE;
 
 export interface CreateCommunityRequest {
   title: string;
@@ -69,6 +79,8 @@ export interface CommunityMessageDto {
   authorId: string;
   authorName: string;
   text: string;
+  messageType: CommunityMessageType;
+  debateId: string | null;
   createdAt: string;
 }
 
@@ -83,5 +95,24 @@ export interface CommunityOpinionSubmittedEvent {
   id: string;
   type: "opinion.submitted";
   communityId: string;
+  opinion: CommunityOpinionDto;
+}
+
+export interface CommunityMessageAckEvent {
+  id: string;
+  type: typeof COMMUNITY_MESSAGE_ACK_EVENT;
+  communityId: string;
+  commandId: string;
+  clientMessageId: string;
+  status: CommunityCommandStatus;
+  message: CommunityMessageDto;
+}
+
+export interface CommunityOpinionAckEvent {
+  id: string;
+  type: typeof COMMUNITY_OPINION_ACK_EVENT;
+  communityId: string;
+  commandId: string;
+  status: typeof COMMUNITY_COMMAND_STATUS_STORED;
   opinion: CommunityOpinionDto;
 }

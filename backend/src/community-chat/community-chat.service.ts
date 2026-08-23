@@ -356,9 +356,11 @@ function mapMessage(message: CommunityMessageEntity): CommunityMessageDto {
     id: message.id,
     communityId: message.communityId,
     clientMessageId: message.clientMessageId,
-    authorId: message.authorId,
-    authorName: message.author.displayName,
+    authorId: message.authorId ?? "system",
+    authorName: message.author?.displayName ?? "헤임달",
     text: message.body,
+    messageType: message.type,
+    debateId: message.debateId,
     createdAt: message.createdAt.toISOString(),
   };
 }

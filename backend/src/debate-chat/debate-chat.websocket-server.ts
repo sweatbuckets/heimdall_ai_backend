@@ -10,8 +10,17 @@ import { ConfigService } from "@nestjs/config";
 import { AuthService } from "../auth/auth.service";
 import { extractBearerToken } from "../auth/jwt-auth.guard";
 import { CommunityChatService } from "../community-chat/community-chat.service";
+import { CommunityNotificationService } from "../community-chat/community-notification.service";
+import { CommunityMessageType } from "../community-chat/entities/community-message.entity";
+import { DebateStatus } from "../debates/domain/debate.enums";
 import {
+  COMMUNITY_COMMAND_STATUS_DUPLICATE,
+  COMMUNITY_COMMAND_STATUS_STORED,
+  COMMUNITY_MESSAGE_ACK_EVENT,
+  COMMUNITY_OPINION_ACK_EVENT,
+  CommunityMessageAckEvent,
   CommunityMessageCreatedEvent,
+  CommunityOpinionAckEvent,
   CommunityOpinionSubmittedEvent,
 } from "../community-chat/dto/community-chat.dto";
 import { validateCommunityCommand } from "../community-chat/validators/community-chat.validator";
@@ -47,12 +56,14 @@ export class DebateChatWebSocketServer
   private readonly rooms = new Map<string, Set<WebSocket>>();
   private readonly communityRooms = new Map<string, Set<WebSocket>>();
   private server: WebSocketServer | null = null;
+  private unsubscribeCommunityNotifications: (() => void) | null = null;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly debateChatService: DebateChatService,
     private readonly authService: AuthService,
     private readonly communityChatService: CommunityChatService,
+    private readonly communityNotificationService: CommunityNotificationService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -65,11 +76,31 @@ export class DebateChatWebSocketServer
     this.server.on("connection", (socket, request) => {
       void this.handleConnection(socket, request);
     });
+    this.unsubscribeCommunityNotifications =
+      this.communityNotificationService.subscribe((message) => {
+        if (
+          message.messageType === CommunityMessageType.DEBATE_RESULT &&
+          message.debateId
+        ) {
+          this.publishDebateEnded(
+            message.communityId,
+            message.debateId,
+            DebateStatus.COMPLETED,
+            null,
+          );
+        }
+        this.broadcastCommunity(
+          message.communityId,
+          createCommunityMessageEvent(message.communityId, message),
+        );
+      });
 
     this.logger.log(`Debate chat WebSocket server listening on port ${port}.`);
   }
 
   onApplicationShutdown(): void {
+    this.unsubscribeCommunityNotifications?.();
+    this.unsubscribeCommunityNotifications = null;
     this.server?.close();
     this.server = null;
     this.rooms.clear();
@@ -254,8 +285,17 @@ export class DebateChatWebSocketServer
           memberId,
           { claim: command.claim, reasons: command.reasons },
         );
-        this.broadcastCommunity(
+        sendEvent(socket, {
+          id: randomUUID(),
+          type: COMMUNITY_OPINION_ACK_EVENT,
           communityId,
+          commandId: command.id,
+          status: COMMUNITY_COMMAND_STATUS_STORED,
+          opinion,
+        } satisfies CommunityOpinionAckEvent);
+        this.broadcastExceptCommunity(
+          communityId,
+          socket,
           createCommunityOpinionEvent(communityId, opinion),
         );
         return;
@@ -269,10 +309,19 @@ export class DebateChatWebSocketServer
         },
       );
       const event = createCommunityMessageEvent(communityId, result.message);
+      sendEvent(socket, {
+        id: randomUUID(),
+        type: COMMUNITY_MESSAGE_ACK_EVENT,
+        communityId,
+        commandId: command.id,
+        clientMessageId: command.clientMessageId,
+        status: result.created
+          ? COMMUNITY_COMMAND_STATUS_STORED
+          : COMMUNITY_COMMAND_STATUS_DUPLICATE,
+        message: result.message,
+      } satisfies CommunityMessageAckEvent);
       if (result.created) {
-        this.broadcastCommunity(communityId, event);
-      } else {
-        sendEvent(socket, event);
+        this.broadcastExceptCommunity(communityId, socket, event);
       }
     } catch (error) {
       sendEvent(
@@ -404,14 +453,23 @@ export class DebateChatWebSocketServer
     }
   }
 
-  private broadcastCommunity(
+  private broadcastCommunity(communityId: string, event: object): void {
+    const room = this.communityRooms.get(communityId);
+    if (!room) return;
+    for (const socket of room) {
+      sendEvent(socket, event);
+    }
+  }
+
+  private broadcastExceptCommunity(
     communityId: string,
+    excludedSocket: WebSocket,
     event: object,
   ): void {
     const room = this.communityRooms.get(communityId);
     if (!room) return;
     for (const socket of room) {
-      sendEvent(socket, event);
+      if (socket !== excludedSocket) sendEvent(socket, event);
     }
   }
 

@@ -32,8 +32,16 @@ import { JudgeReadinessService } from "../judge/judge-readiness.service";
 import { CommunityMemberEntity } from "../community-chat/entities/community-member.entity";
 import { CommunityEntity } from "../community-chat/entities/community.entity";
 import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
-import { getDebateExpiresAt } from "./debate-timeout.constants";
+import {
+  getDebateExpiresAt,
+  getDebateStartsAt,
+} from "./debate-timeout.constants";
 import { DebateChatWebSocketServer } from "../debate-chat/debate-chat.websocket-server";
+import { FactCheckResultEntity } from "./entities/fact-check-result.entity";
+import {
+  FactCheckResultResponseDto,
+  mapFactCheckResultResponse,
+} from "./dto/fact-check-result-response.dto";
 
 @Injectable()
 export class DebatesService {
@@ -158,7 +166,7 @@ export class DebatesService {
           existing.sideBSpeakerId === opponentMemberId
         ) {
           if (existing.status === DebateStatus.READY) {
-            const now = new Date();
+            const startsAt = getDebateStartsAt();
             await manager.update(
               DebateEntity,
               { id: existing.id, status: DebateStatus.READY },
@@ -167,8 +175,8 @@ export class DebatesService {
                 currentPhase: DebatePhase.OPENING,
                 currentRound: 1,
                 currentTurnSide: DebateSide.SIDE_A,
-                currentTurnStartedAt: now,
-                startedAt: now,
+                currentTurnStartedAt: startsAt,
+                startedAt: startsAt,
               },
             );
             await manager.update(
@@ -185,7 +193,7 @@ export class DebatesService {
         );
       }
 
-      const now = new Date();
+      const startsAt = getDebateStartsAt();
       const id = randomUUID();
       await manager.insert(DebateEntity, {
         id,
@@ -198,8 +206,8 @@ export class DebatesService {
         currentPhase: DebatePhase.OPENING,
         currentRound: 1,
         currentTurnSide: DebateSide.SIDE_A,
-        currentTurnStartedAt: now,
-        startedAt: now,
+        currentTurnStartedAt: startsAt,
+        startedAt: startsAt,
       });
       await manager.update(
         CommunityEntity,
@@ -306,6 +314,8 @@ export class DebatesService {
       throw new NotFoundException(`JudgmentResult not found: ${id}.`);
     }
 
+    const factChecks = await this.findDebateFactChecks(id);
+
     return {
       debate: mapDebateToDto(debate),
       viewerSide:
@@ -315,7 +325,26 @@ export class DebatesService {
             ? DebateSide.SIDE_B
             : null,
       judgmentResult: mapJudgmentResultResponse(judgmentResult),
+      factChecks,
     };
+  }
+
+  private async findDebateFactChecks(
+    debateId: string,
+  ): Promise<FactCheckResultResponseDto[]> {
+    const results = await this.dataSource
+      .getRepository(FactCheckResultEntity)
+      .createQueryBuilder("factCheck")
+      .innerJoinAndSelect("factCheck.component", "component")
+      .innerJoin("component.turn", "turn")
+      .leftJoinAndSelect("factCheck.sources", "source")
+      .where("turn.debate_id = :debateId", { debateId })
+      .orderBy("turn.sequence", "ASC")
+      .addOrderBy("component.createdAt", "ASC")
+      .addOrderBy("source.createdAt", "ASC")
+      .getMany();
+
+    return results.map(mapFactCheckResultResponse);
   }
 
   async startDebate(id: string): Promise<DebateDto> {
@@ -335,7 +364,7 @@ export class DebatesService {
       throw new ConflictException(`Debate cannot start from ${debate.status}.`);
     }
 
-    const now = new Date();
+    const startsAt = getDebateStartsAt();
     const updateResult = await this.dataSource
       .createQueryBuilder()
       .update(DebateEntity)
@@ -344,8 +373,8 @@ export class DebatesService {
         currentPhase: DebatePhase.OPENING,
         currentRound: 1,
         currentTurnSide: DebateSide.SIDE_A,
-        currentTurnStartedAt: now,
-        startedAt: now,
+        currentTurnStartedAt: startsAt,
+        startedAt: startsAt,
       })
       .where("id = :id", { id })
       .andWhere("status = :status", { status: DebateStatus.READY })

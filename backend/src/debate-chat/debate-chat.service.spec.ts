@@ -168,6 +168,20 @@ describe("DebateChatService", () => {
     ).rejects.toThrow(DebateChatStateError);
   });
 
+  it("rejects messages during the preparation period", async () => {
+    const preparingDebate: Partial<DebateEntity> = {
+      ...debate,
+      currentTurnStartedAt: new Date(Date.now() + 10_000),
+    };
+    const redis = new MockRedis([1, 5]);
+    const service = createService(preparingDebate, redis);
+
+    await expect(
+      service.appendDraftMessage("debate-1", command),
+    ).rejects.toThrow("The debate is still in its preparation period.");
+    expect(redis.evalCalls).toHaveLength(0);
+  });
+
   it("releases finalize locks only through owner-token Lua compare-and-delete", async () => {
     const redis = new MockRedis(1);
     const service = createService(debate, redis);

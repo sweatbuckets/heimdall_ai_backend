@@ -14,6 +14,7 @@ import { JudgeService } from "./judge.service";
 import { AssembledJudgeInput, JudgeOutput } from "./dto/judge.dto";
 import { JudgeConflictError, JudgeInputError } from "./errors/judge.errors";
 import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
+import { CommunityNotificationService } from "../community-chat/community-notification.service";
 
 interface UpdateExecutionResult {
   affected: number;
@@ -197,6 +198,7 @@ describe("JudgeService", () => {
         aiService as unknown as JudgeAiService,
         new MockConfigService() as unknown as ConfigService,
         new AiInvocationCancellationService(),
+        new CommunityNotificationService(),
       ),
       assembler,
       aiService,
@@ -213,7 +215,7 @@ describe("JudgeService", () => {
       assembled.input,
       expect.anything(),
     );
-    expect(dataSource.manager.insertedValues).toHaveLength(1);
+    expect(dataSource.manager.insertedValues).toHaveLength(2);
     expect(dataSource.manager.insertedValues[0]).toMatchObject({
       debateId: "debate-1",
       sideATotalScore: 78,

@@ -252,9 +252,10 @@ export class DebateChatService implements OnModuleDestroy {
 
     try {
       const rawMessages = await this.redis.lrange(draftKey, 0, -1);
-      const draftMessages = rawMessages.length > 0
-        ? rawMessages.map(parseDraftMessage)
-        : [createEmptyTurnDraft(scope)];
+      const draftMessages =
+        rawMessages.length > 0
+          ? rawMessages.map(parseDraftMessage)
+          : [createEmptyTurnDraft(scope)];
 
       const content = draftMessages
         .map((message) => message.content.trim())
@@ -520,6 +521,12 @@ function validateCurrentTurnTime(debate: DebateEntity): void {
   }
 
   const elapsedMs = Date.now() - debate.currentTurnStartedAt.getTime();
+
+  if (elapsedMs < 0) {
+    throw new DebateChatStateError(
+      "The debate is still in its preparation period.",
+    );
+  }
 
   if (
     !debate.currentPhase ||

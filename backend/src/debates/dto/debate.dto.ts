@@ -1,6 +1,7 @@
 import { DebatePhase, DebateSide, DebateStatus } from "../domain/debate.enums";
 import { JudgmentResultResponseDto } from "../../judge/dto/judgment-result-response.dto";
 import { DebateTurnWithVotesDto } from "./debate-turn-vote.dto";
+import { FactCheckResultResponseDto } from "./fact-check-result-response.dto";
 
 export interface CreateDebateRequest {
   communityId: string;
@@ -51,4 +52,5 @@ export interface DebateResultDto {
   debate: DebateDto;
   viewerSide: DebateSide | null;
   judgmentResult: JudgmentResultResponseDto;
+  factChecks: FactCheckResultResponseDto[];
 }

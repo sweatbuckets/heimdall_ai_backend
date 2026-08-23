@@ -11,6 +11,7 @@ import { DebatesController } from "./debates.controller";
 import { DebatesService } from "./debates.service";
 import { CommunityDebatesController } from "./community-debates.controller";
 import { DebateTimeoutService } from "./debate-timeout.service";
+import { CommunityChatModule } from "../community-chat/community-chat.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { DebateTimeoutService } from "./debate-timeout.service";
     AiInvocationModule,
     AnalyzerModule,
     DebateChatModule,
+    CommunityChatModule,
   ],
   controllers: [DebatesController, CommunityDebatesController],
   providers: [DebatesService, DebateTimeoutService],

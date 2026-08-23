@@ -22,6 +22,7 @@ import { CommunityEntity } from "../community-chat/entities/community.entity";
 import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
 import { MemberEntity } from "../members/entities/member.entity";
 import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
+import { CommunityNotificationService } from "../community-chat/community-notification.service";
 
 export interface JudgeDebateResult {
   debateId: string;
@@ -36,6 +37,7 @@ export class JudgeService {
     private readonly judgeAiService: JudgeAiService,
     private readonly configService: ConfigService,
     private readonly aiCancellationService: AiInvocationCancellationService,
+    private readonly communityNotificationService: CommunityNotificationService,
   ) {}
 
   async judgeDebate(debateId: string): Promise<JudgeDebateResult> {
@@ -63,44 +65,52 @@ export class JudgeService {
       new Date(),
     );
 
-    await this.dataSource.transaction(async (manager) => {
-      const debate = await manager.findOne(DebateEntity, {
-        where: { id: debateId },
-        lock: { mode: "pessimistic_write" },
-      });
-      if (!debate || debate.status === DebateStatus.FAILED) {
-        throw new AiInvocationCancelledError(debateId);
-      }
+    const communityNotification = await this.dataSource.transaction(
+      async (manager) => {
+        const debate = await manager.findOne(DebateEntity, {
+          where: { id: debateId },
+          lock: { mode: "pessimistic_write" },
+        });
+        if (!debate || debate.status === DebateStatus.FAILED) {
+          throw new AiInvocationCancelledError(debateId);
+        }
 
-      await manager.insert(JudgmentResultEntity, judgmentResult);
+        await manager.insert(JudgmentResultEntity, judgmentResult);
 
-      const updateResult = await manager
-        .createQueryBuilder()
-        .update(DebateEntity)
-        .set({
-          status: DebateStatus.COMPLETED,
-          endedAt: new Date(),
-          judgingStartedAt: null,
-        })
-        .where("id = :debateId", { debateId })
-        .andWhere("status = :status", { status: DebateStatus.JUDGING })
-        .execute();
+        const updateResult = await manager
+          .createQueryBuilder()
+          .update(DebateEntity)
+          .set({
+            status: DebateStatus.COMPLETED,
+            endedAt: new Date(),
+            judgingStartedAt: null,
+          })
+          .where("id = :debateId", { debateId })
+          .andWhere("status = :status", { status: DebateStatus.JUDGING })
+          .execute();
 
-      if (updateResult.affected !== 1) {
-        throw new JudgeConflictError(
-          `Debate could not be completed from JUDGING: ${debateId}.`,
+        if (updateResult.affected !== 1) {
+          throw new JudgeConflictError(
+            `Debate could not be completed from JUDGING: ${debateId}.`,
+          );
+        }
+        if (!judgmentResult.winner) {
+          throw new JudgeConflictError("Judgment winner was not generated.");
+        }
+        await this.awardWinnerScore(manager, debate, judgmentResult.winner);
+        await manager.update(
+          CommunityEntity,
+          { id: debate.communityId },
+          { status: CommunityStatus.WAITING },
         );
-      }
-      if (!judgmentResult.winner) {
-        throw new JudgeConflictError("Judgment winner was not generated.");
-      }
-      await this.awardWinnerScore(manager, debate, judgmentResult.winner);
-      await manager.update(
-        CommunityEntity,
-        { id: debate.communityId },
-        { status: CommunityStatus.WAITING },
-      );
-    });
+        return this.communityNotificationService.createDebateResult(
+          manager,
+          debate.communityId,
+          debateId,
+        );
+      },
+    );
+    this.communityNotificationService.publish(communityNotification);
 
     if (!judgmentResult.id) {
       throw new JudgeConflictError("JudgmentResult id was not generated.");

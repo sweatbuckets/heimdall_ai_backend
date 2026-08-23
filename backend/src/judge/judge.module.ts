@@ -8,12 +8,14 @@ import { JudgeController } from "./judge.controller";
 import { JudgeInputAssembler } from "./judge-input.assembler";
 import { JudgeReadinessService } from "./judge-readiness.service";
 import { JudgeService } from "./judge.service";
+import { CommunityChatModule } from "../community-chat/community-chat.module";
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([...debateEntities]),
     GeminiModule,
     AiInvocationModule,
+    CommunityChatModule,
   ],
   controllers: [JudgeController],
   providers: [

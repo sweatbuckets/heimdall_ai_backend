@@ -27,6 +27,8 @@ import { FactCheckBatchTaskEntity } from "./entities/fact-check-batch-task.entit
 import { DEBATE_TOTAL_DURATION_MS } from "./debate-timeout.constants";
 import { MemberEntity } from "../members/entities/member.entity";
 import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
+import { CommunityNotificationService } from "../community-chat/community-notification.service";
+import { CommunityMessageDto } from "../community-chat/dto/community-chat.dto";
 
 const TIMEOUT_POLL_INTERVAL_MS = 2_000;
 const TIMEOUT_BATCH_SIZE = 20;
@@ -50,6 +52,7 @@ export class DebateTimeoutService {
     private readonly cancellationService: AiInvocationCancellationService,
     private readonly debateChatService: DebateChatService,
     private readonly websocketServer: DebateChatWebSocketServer,
+    private readonly communityNotificationService: CommunityNotificationService,
     @InjectQueue(FACT_CHECK_QUEUE)
     private readonly factCheckQueue: Queue,
   ) {}
@@ -217,6 +220,15 @@ export class DebateTimeoutService {
         { status: CommunityStatus.WAITING },
       );
       if (options.forfeitingMemberId) {
+        const forfeitingMember = await manager.findOne(MemberEntity, {
+          where: { id: options.forfeitingMemberId },
+          select: { displayName: true },
+        });
+        if (!forfeitingMember) {
+          throw new Error(
+            `Forfeiting member not found: ${options.forfeitingMemberId}.`,
+          );
+        }
         const winnerMemberId =
           debate.sideASpeakerId === options.forfeitingMemberId
             ? debate.sideBSpeakerId
@@ -232,12 +244,26 @@ export class DebateTimeoutService {
             `Forfeit winner score update failed: ${winnerMemberId}.`,
           );
         }
+        const notification =
+          await this.communityNotificationService.createDebateForfeit(
+            manager,
+            debate.communityId,
+            debateId,
+            forfeitingMember.displayName,
+          );
+        return {
+          communityId: debate.communityId,
+          turnIds,
+          taskIds: tasks.map((task) => task.id),
+          notification,
+        };
       }
 
       return {
         communityId: debate.communityId,
         turnIds,
         taskIds: tasks.map((task) => task.id),
+        notification: null as CommunityMessageDto | null,
       };
     });
 
@@ -257,6 +283,9 @@ export class DebateTimeoutService {
       DebateStatus.FAILED,
       options.eventReason,
     );
+    if (claimed.notification) {
+      this.communityNotificationService.publish(claimed.notification);
+    }
     return true;
   }
 

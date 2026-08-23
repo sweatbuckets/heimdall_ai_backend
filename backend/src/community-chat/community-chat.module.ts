@@ -6,6 +6,7 @@ import { CommunityEntity } from "./entities/community.entity";
 import { CommunityMemberEntity } from "./entities/community-member.entity";
 import { CommunityMessageEntity } from "./entities/community-message.entity";
 import { CommunityOpinionEntity } from "./entities/community-opinion.entity";
+import { CommunityNotificationService } from "./community-notification.service";
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { CommunityOpinionEntity } from "./entities/community-opinion.entity";
     ]),
   ],
   controllers: [CommunityChatController],
-  providers: [CommunityChatService],
-  exports: [CommunityChatService],
+  providers: [CommunityChatService, CommunityNotificationService],
+  exports: [CommunityChatService, CommunityNotificationService],
 })
 export class CommunityChatModule {}
