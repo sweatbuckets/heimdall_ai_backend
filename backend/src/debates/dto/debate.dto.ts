@@ -42,10 +42,21 @@ export interface DebateSpeakerDto {
   displayName: string;
   profileImageUrl: string | null;
   score: number;
+  claim: string;
+  reasons: string[];
 }
 
 export interface StartCommunityDebateRequest {
   opponentMemberId: string;
+}
+
+export interface DebateInvitationDto {
+  id: string;
+  communityId: string;
+  hostMemberId: string;
+  hostName: string;
+  opponentMemberId: string;
+  expiresAt: string;
 }
 
 export interface DebateResultDto {

@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { Queue } from "bullmq";
-import { DataSource, In, LessThanOrEqual } from "typeorm";
+import { DataSource, In } from "typeorm";
 import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
 import { AnalyzerQueueService } from "../analyzer/queues/analyzer-queue.service";
 import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
@@ -24,14 +24,22 @@ import {
 import { DebateEntity } from "./entities/debate.entity";
 import { DebateTurnEntity } from "./entities/debate-turn.entity";
 import { FactCheckBatchTaskEntity } from "./entities/fact-check-batch-task.entity";
-import { DEBATE_TOTAL_DURATION_MS } from "./debate-timeout.constants";
+import {
+  DEBATE_DURATION_PER_ROUND_MS,
+  DEBATE_FIXED_DURATION_MS,
+  isDebateLiveExpired,
+} from "./debate-timeout.constants";
 import { MemberEntity } from "../members/entities/member.entity";
 import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
 import { CommunityNotificationService } from "../community-chat/community-notification.service";
-import { CommunityMessageDto } from "../community-chat/dto/community-chat.dto";
 
 const TIMEOUT_POLL_INTERVAL_MS = 2_000;
 const TIMEOUT_BATCH_SIZE = 20;
+const TIMEOUT_ELIGIBLE_STATUSES = [
+  DebateStatus.IN_PROGRESS,
+  DebateStatus.DEBATE_FINALIZED,
+  DebateStatus.JUDGING,
+];
 
 interface TerminateDebateOptions {
   allowedStatuses: DebateStatus[];
@@ -62,21 +70,27 @@ export class DebateTimeoutService {
     if (this.polling) return;
     this.polling = true;
     try {
-      const deadline = new Date(Date.now() - DEBATE_TOTAL_DURATION_MS);
       const candidates = await this.dataSource
         .getRepository(DebateEntity)
-        .find({
-          where: {
-            status: In([
-              DebateStatus.IN_PROGRESS,
-              DebateStatus.DEBATE_FINALIZED,
-              DebateStatus.JUDGING,
-            ]),
-            startedAt: LessThanOrEqual(deadline),
+        .createQueryBuilder("debate")
+        .where("debate.status IN (:...statuses)", {
+          statuses: TIMEOUT_ELIGIBLE_STATUSES,
+        })
+        .andWhere("debate.started_at IS NOT NULL")
+        .andWhere(
+          `debate.started_at +
+            (:fixedDurationMs +
+              debate.rebuttal_question_rounds * :durationPerRoundMs) *
+              INTERVAL '1 millisecond' <= :now`,
+          {
+            fixedDurationMs: DEBATE_FIXED_DURATION_MS,
+            durationPerRoundMs: DEBATE_DURATION_PER_ROUND_MS,
+            now: new Date(),
           },
-          order: { startedAt: "ASC" },
-          take: TIMEOUT_BATCH_SIZE,
-        });
+        )
+        .orderBy("debate.started_at", "ASC")
+        .take(TIMEOUT_BATCH_SIZE)
+        .getMany();
 
       for (const candidate of candidates) {
         try {
@@ -95,11 +109,7 @@ export class DebateTimeoutService {
 
   async expireDebate(debateId: string): Promise<boolean> {
     return this.terminateDebate(debateId, {
-      allowedStatuses: [
-        DebateStatus.IN_PROGRESS,
-        DebateStatus.DEBATE_FINALIZED,
-        DebateStatus.JUDGING,
-      ],
+      allowedStatuses: TIMEOUT_ELIGIBLE_STATUSES,
       eventReason: "TOTAL_TIME_EXPIRED",
       taskFailureReason: "Debate total time limit expired.",
       requireExpired: true,
@@ -148,9 +158,7 @@ export class DebateTimeoutService {
 
       if (
         !options.allowedStatuses.includes(debate.status) ||
-        (options.requireExpired &&
-          (!debate.startedAt ||
-            Date.now() < debate.startedAt.getTime() + DEBATE_TOTAL_DURATION_MS))
+        (options.requireExpired && !isDebateLiveExpired(debate))
       ) {
         return null;
       }
@@ -259,11 +267,17 @@ export class DebateTimeoutService {
         };
       }
 
+      const notification =
+        await this.communityNotificationService.createDebateTimeout(
+          manager,
+          debate.communityId,
+          debateId,
+        );
       return {
         communityId: debate.communityId,
         turnIds,
         taskIds: tasks.map((task) => task.id),
-        notification: null as CommunityMessageDto | null,
+        notification,
       };
     });
 

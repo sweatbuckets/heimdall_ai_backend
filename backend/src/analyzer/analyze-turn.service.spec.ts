@@ -5,7 +5,10 @@ import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import { AnalyzeTurnService } from "./analyze-turn.service";
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
-import { AnalyzeTurnConflictError } from "./errors/analyzer.errors";
+import {
+  AnalyzeTurnConflictError,
+  AnalyzeTurnDependencyPendingError,
+} from "./errors/analyzer.errors";
 import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
 import {
   DebatePhase,
@@ -99,6 +102,7 @@ class MockDataSource {
     private readonly componentCount = 0,
     private readonly factCheckTask: Partial<FactCheckBatchTaskEntity> | null = null,
     completionAffected = 1,
+    private readonly incompleteEarlierTurnCount = 0,
   ) {
     this.allRootQueryBuilders = rootAffectedResults.map(
       (affected) => new MockUpdateQueryBuilder(affected),
@@ -119,7 +123,7 @@ class MockDataSource {
 
   getRepository(entity: unknown): MockRepository<object> {
     if (entity === DebateTurnEntity) {
-      return new MockRepository(this.turn);
+      return new MockRepository(this.turn, this.incompleteEarlierTurnCount);
     }
 
     if (entity === ArgumentComponentEntity) {
@@ -261,6 +265,29 @@ describe("AnalyzeTurnService", () => {
 
     await expect(service.analyzeTurn(turnId)).rejects.toThrow(
       AnalyzeTurnConflictError,
+    );
+    expect(assembler.assemble).not.toHaveBeenCalled();
+    expect(aiService.analyze).not.toHaveBeenCalled();
+  });
+
+  it("waits without calling Gemini when an earlier turn is incomplete", async () => {
+    const dataSource = new MockDataSource(
+      [0],
+      {
+        id: turnId,
+        debateId: "debate-1",
+        sequence: 2,
+        analysisStatus: DebateTurnAnalysisStatus.PENDING,
+      },
+      0,
+      null,
+      1,
+      1,
+    );
+    const { service, assembler, aiService } = createService(dataSource);
+
+    await expect(service.analyzeTurn(turnId)).rejects.toThrow(
+      AnalyzeTurnDependencyPendingError,
     );
     expect(assembler.assemble).not.toHaveBeenCalled();
     expect(aiService.analyze).not.toHaveBeenCalled();

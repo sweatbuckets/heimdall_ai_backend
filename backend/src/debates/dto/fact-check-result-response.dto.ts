@@ -1,4 +1,4 @@
-import { VerificationStatus } from "../domain/debate.enums";
+import { DebateSide, VerificationStatus } from "../domain/debate.enums";
 import { FactCheckResultEntity } from "../entities/fact-check-result.entity";
 
 export interface FactCheckSourceResponseDto {
@@ -10,6 +10,8 @@ export interface FactCheckSourceResponseDto {
 export interface FactCheckResultResponseDto {
   id: string;
   componentId: string;
+  speakerId: string;
+  speakerSide: DebateSide;
   statement: string;
   status: VerificationStatus;
   reason: string;
@@ -23,6 +25,8 @@ export function mapFactCheckResultResponse(
   return {
     id: entity.id,
     componentId: entity.componentId,
+    speakerId: entity.component.turn.speakerId,
+    speakerSide: entity.component.turn.speakerSide,
     statement: entity.component.statement,
     status: entity.status,
     reason: entity.reason,

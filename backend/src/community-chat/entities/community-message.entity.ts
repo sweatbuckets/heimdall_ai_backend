@@ -13,8 +13,10 @@ import { CommunityEntity } from "./community.entity";
 
 export enum CommunityMessageType {
   TEXT = "TEXT",
+  DEBATE_STARTED = "DEBATE_STARTED",
   DEBATE_RESULT = "DEBATE_RESULT",
   DEBATE_FORFEIT = "DEBATE_FORFEIT",
+  DEBATE_TIMEOUT = "DEBATE_TIMEOUT",
 }
 
 @Entity("community_message")

@@ -7,6 +7,7 @@ import { parseRequiredJson } from "../ai/gemini/gemini-response.util";
 import { ANALYZE_TURN_RESPONSE_SCHEMA } from "../ai/schemas/analyze-turn.schema";
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
 import { validateAnalyzeTurnOutput } from "./validators/analyze-turn-output.validator";
+import { withAbortableTimeout } from "../ai/gemini/gemini-timeout.util";
 
 const ANALYZER_SYSTEM_INSTRUCTION = [
   "You are a debate argument graph analyzer.",
@@ -81,11 +82,11 @@ export class AnalyzerAiService {
     );
     const maxRetries = this.configService.get<number>(
       "GEMINI_ANALYZER_MAX_RETRIES",
-      1,
+      0,
     );
     const timeoutMs = this.configService.get<number>(
       "GEMINI_REQUEST_TIMEOUT_MS",
-      60000,
+      120000,
     );
 
     const output = await this.generateWithRetry(
@@ -111,10 +112,11 @@ export class AnalyzerAiService {
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
-        return await withTimeout(
-          this.generate(model, input, abortSignal),
+        return await withAbortableTimeout(
+          (signal) => this.generate(model, input, signal),
           timeoutMs,
           "Gemini analyzer request timed out.",
+          abortSignal,
         );
       } catch (error) {
         if (abortSignal?.aborted) throw error;
@@ -164,25 +166,5 @@ function assertGeminiApiKey(configService: ConfigService): void {
     throw new GeminiConfigurationError(
       "GEMINI_API_KEY is required for Analyzer AI calls.",
     );
-  }
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }

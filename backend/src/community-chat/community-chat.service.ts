@@ -24,10 +24,14 @@ import { CommunityEntity } from "./entities/community.entity";
 import { CommunityMemberEntity } from "./entities/community-member.entity";
 import { CommunityMessageEntity } from "./entities/community-message.entity";
 import { CommunityOpinionEntity } from "./entities/community-opinion.entity";
+import { CommunityNotificationService } from "./community-notification.service";
 
 @Injectable()
 export class CommunityChatService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly notificationService: CommunityNotificationService,
+  ) {}
 
   async createCommunity(
     memberId: string,
@@ -151,14 +155,7 @@ export class CommunityChatService {
       .setParameter("openIntent", CommunityDebateIntent.OPEN_TO_DEBATE)
       .getMany();
 
-    return memberships.map((membership) => ({
-      id: membership.member.id,
-      displayName: membership.member.displayName,
-      profileImageUrl: membership.member.profileImageUrl,
-      role: membership.role,
-      debateIntent: membership.debateIntent,
-      joinedAt: membership.joinedAt.toISOString(),
-    }));
+    return memberships.map(mapCommunityMember);
   }
 
   async updateCommunityDebateIntent(
@@ -174,6 +171,22 @@ export class CommunityChatService {
         `Community member not found: ${communityId}/${memberId}.`,
       );
     }
+
+    const membership = await this.dataSource
+      .getRepository(CommunityMemberEntity)
+      .findOne({
+        where: { communityId, memberId },
+        relations: { member: true },
+      });
+    if (!membership) {
+      throw new NotFoundException(
+        `Community member not found after update: ${communityId}/${memberId}.`,
+      );
+    }
+    this.notificationService.publishDebateIntent({
+      communityId,
+      member: mapCommunityMember(membership),
+    });
   }
 
   async listMessages(
@@ -348,6 +361,19 @@ function mapCommunity(
     createdAt: community.createdAt.toISOString(),
     isOwnedByCurrentUser: community.hostId === currentMemberId,
     isJoined,
+  };
+}
+
+function mapCommunityMember(
+  membership: CommunityMemberEntity,
+): CommunityMemberDto {
+  return {
+    id: membership.member.id,
+    displayName: membership.member.displayName,
+    profileImageUrl: membership.member.profileImageUrl,
+    role: membership.role,
+    debateIntent: membership.debateIntent,
+    joinedAt: membership.joinedAt.toISOString(),
   };
 }
 

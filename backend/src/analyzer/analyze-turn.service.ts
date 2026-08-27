@@ -3,7 +3,7 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Job, Queue } from "bullmq";
-import { DataSource } from "typeorm";
+import { DataSource, LessThan, Not } from "typeorm";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import {
@@ -16,6 +16,7 @@ import {
 } from "./mappers/analyze-turn-entity.mapper";
 import {
   AnalyzeTurnConflictError,
+  AnalyzeTurnDependencyPendingError,
   AnalyzeTurnInputError,
 } from "./errors/analyzer.errors";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
@@ -193,6 +194,16 @@ export class AnalyzeTurnService {
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PENDING,
       })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM "debate_turn" "previous_turn"
+          WHERE "previous_turn"."debate_id" = "debate_turn"."debate_id"
+            AND "previous_turn"."sequence" < "debate_turn"."sequence"
+            AND "previous_turn"."analysis_status" <> :completedStatus
+        )`,
+        { completedStatus: DebateTurnAnalysisStatus.COMPLETED },
+      )
       .execute();
 
     return result.affected === 1;
@@ -211,6 +222,19 @@ export class AnalyzeTurnService {
 
     if (turn.analysisStatus === DebateTurnAnalysisStatus.COMPLETED) {
       return this.getCompletedAnalysisResult(turnId);
+    }
+
+    if (
+      turn.analysisStatus === DebateTurnAnalysisStatus.PENDING &&
+      (await this.dataSource.getRepository(DebateTurnEntity).count({
+        where: {
+          debateId: turn.debateId,
+          sequence: LessThan(turn.sequence),
+          analysisStatus: Not(DebateTurnAnalysisStatus.COMPLETED),
+        },
+      })) > 0
+    ) {
+      throw new AnalyzeTurnDependencyPendingError(turnId);
     }
 
     throw new AnalyzeTurnConflictError(

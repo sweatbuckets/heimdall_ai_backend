@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, LessThan, Repository } from "typeorm";
 import { AnalyzeTurnInput, ExistingComponent } from "./dto/analyze-turn.dto";
 import { AnalyzeTurnInputError } from "./errors/analyzer.errors";
 import { DebateSide } from "../debates/domain/debate.enums";
@@ -39,6 +39,7 @@ export class AnalyzerInputAssembler {
     const accumulatedTurns = await this.debateTurnRepository.find({
       where: {
         debateId: currentTurn.debateId,
+        sequence: LessThan(currentTurn.sequence),
       },
       relations: {
         components: true,
@@ -48,9 +49,9 @@ export class AnalyzerInputAssembler {
       },
     });
 
-    const existingComponents = accumulatedTurns
-      .filter((turn) => turn.id !== currentTurn.id)
-      .flatMap((turn) => this.mapTurnComponents(turn));
+    const existingComponents = accumulatedTurns.flatMap((turn) =>
+      this.mapTurnComponents(turn),
+    );
 
     const existingComponentIds = existingComponents.map(
       (component) => component.id,

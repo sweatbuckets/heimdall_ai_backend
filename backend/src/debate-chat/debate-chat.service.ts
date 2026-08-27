@@ -30,7 +30,7 @@ import {
   DebateChatInputError,
   DebateChatStateError,
 } from "./errors/debate-chat.errors";
-import { DEBATE_TOTAL_DURATION_MS } from "../debates/debate-timeout.constants";
+import { isDebateLiveExpired } from "../debates/debate-timeout.constants";
 import {
   getDebateTurnLimitMs,
   getDebateTurnLimitSeconds,
@@ -435,11 +435,10 @@ function validateDebateCanReceiveTurn(debate: DebateEntity): void {
       `Debate cannot receive turns in status: ${debate.status}.`,
     );
   }
-  if (
-    debate.startedAt &&
-    Date.now() >= debate.startedAt.getTime() + DEBATE_TOTAL_DURATION_MS
-  ) {
-    throw new DebateChatStateError("The debate's 27-minute limit has expired.");
+  if (isDebateLiveExpired(debate)) {
+    throw new DebateChatStateError(
+      "The debate's total time limit has expired.",
+    );
   }
 }
 

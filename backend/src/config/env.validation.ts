@@ -24,8 +24,8 @@ export const envValidationSchema = Joi.object({
   GEMINI_ANALYZER_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_FACT_CHECKER_MODEL: Joi.string().default("gemini-3.5-flash"),
   GEMINI_JUDGE_MODEL: Joi.string().default("gemini-3.5-flash"),
-  GEMINI_REQUEST_TIMEOUT_MS: Joi.number().integer().min(1000).default(60000),
-  GEMINI_ANALYZER_MAX_RETRIES: Joi.number().integer().min(0).default(1),
+  GEMINI_REQUEST_TIMEOUT_MS: Joi.number().integer().min(1000).default(120000),
+  GEMINI_ANALYZER_MAX_RETRIES: Joi.number().integer().min(0).default(0),
   GEMINI_FACT_CHECKER_MAX_RETRIES: Joi.number().integer().min(0).default(1),
   GEMINI_JUDGE_MAX_RETRIES: Joi.number().integer().min(0).default(3),
 

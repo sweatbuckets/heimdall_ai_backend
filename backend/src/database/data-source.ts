@@ -23,6 +23,8 @@ import { AddDebateTimeoutIndex20260810000004 } from "../migrations/2026081000000
 import { LinkCommunityOpinionToMembership20260811000000 } from "../migrations/20260811000000-LinkCommunityOpinionToMembership";
 import { AddMemberScore20260811000001 } from "../migrations/20260811000001-AddMemberScore";
 import { AddCommunityDebateNotifications20260823000000 } from "../migrations/20260823000000-AddCommunityDebateNotifications";
+import { AddCommunityDebateTimeoutNotification20260824000000 } from "../migrations/20260824000000-AddCommunityDebateTimeoutNotification";
+import { AddCommunityDebateStartedNotification20260825000000 } from "../migrations/20260825000000-AddCommunityDebateStartedNotification";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -58,6 +60,8 @@ const AppDataSource = new DataSource({
     LinkCommunityOpinionToMembership20260811000000,
     AddMemberScore20260811000001,
     AddCommunityDebateNotifications20260823000000,
+    AddCommunityDebateTimeoutNotification20260824000000,
+    AddCommunityDebateStartedNotification20260825000000,
   ],
   migrationsTableName: "migrations",
   synchronize: false,

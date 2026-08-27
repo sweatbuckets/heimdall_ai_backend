@@ -219,7 +219,10 @@ export class FactCheckBatchTaskService {
       const task = await manager.findOne(FactCheckBatchTaskEntity, {
         where: { id: factCheckBatchTaskId },
         relations: { turn: { debate: true } },
-        lock: { mode: "pessimistic_read" },
+        lock: {
+          mode: "pessimistic_read",
+          tables: ["fact_check_batch_task"],
+        },
       });
       if (!task || task.turn.debate.status === DebateStatus.FAILED) {
         throw new AiInvocationCancelledError(task?.turn.debateId ?? "unknown");

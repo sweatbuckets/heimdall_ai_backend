@@ -59,6 +59,7 @@ describe("community chat WebSocket acknowledgements", () => {
           publishNotification = listener;
           return jest.fn();
         }),
+        subscribeDebateIntent: jest.fn().mockReturnValue(jest.fn()),
       } as unknown as CommunityNotificationService,
     );
     gateway.onApplicationBootstrap();
