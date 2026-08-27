@@ -16,6 +16,7 @@ import {
 } from "./dto/fact-check-batch.dto";
 import { extractGroundedEvidence } from "./grounding-source.extractor";
 import { validateFactCheckBatchOutput } from "./validators/fact-check-batch-output.validator";
+import { withAbortableTimeout } from "../ai/gemini/gemini-timeout.util";
 
 const FACT_CHECK_GROUNDING_SYSTEM_INSTRUCTION = [
   "You are a fact checker for debate argument components.",
@@ -107,15 +108,12 @@ export class FactCheckerAiService {
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
-        return await withTimeout(
-          this.generateGroundedEvidence(
-            model,
-            input,
-            maxSources,
-            abortSignal,
-          ),
+        return await withAbortableTimeout(
+          (signal) =>
+            this.generateGroundedEvidence(model, input, maxSources, signal),
           timeoutMs,
           "Gemini fact checker grounding request timed out.",
+          abortSignal,
         );
       } catch (error) {
         if (abortSignal?.aborted) throw error;
@@ -142,15 +140,17 @@ export class FactCheckerAiService {
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
-        return await withTimeout(
-          this.generateStructuredOutput(
-            model,
-            input,
-            groundedEvidence,
-            abortSignal,
-          ),
+        return await withAbortableTimeout(
+          (signal) =>
+            this.generateStructuredOutput(
+              model,
+              input,
+              groundedEvidence,
+              signal,
+            ),
           timeoutMs,
           "Gemini fact checker synthesis request timed out.",
+          abortSignal,
         );
       } catch (error) {
         if (abortSignal?.aborted) throw error;
@@ -270,25 +270,5 @@ function assertGeminiApiKey(configService: ConfigService): void {
     throw new GeminiConfigurationError(
       "GEMINI_API_KEY is required for Fact Checker AI calls.",
     );
-  }
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }

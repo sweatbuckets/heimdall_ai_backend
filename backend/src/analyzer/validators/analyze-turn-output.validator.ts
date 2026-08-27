@@ -17,6 +17,7 @@ import {
   NEW_COMPONENT_LOCAL_KEY_PATTERN,
 } from "../constants";
 import { InvalidAnalyzeTurnOutputError } from "../errors/analyzer.errors";
+import { EMPTY_DEBATE_TURN_CONTENT } from "../../debates/debate-turn-content.constants";
 
 export interface AnalyzeTurnValidationLimits {
   maxComponentsPerTurn: number;
@@ -37,6 +38,8 @@ export function validateAnalyzeTurnOutput(
   limits: AnalyzeTurnValidationLimits = DEFAULT_ANALYZE_TURN_VALIDATION_LIMITS,
 ): void {
   validateOutputShape(output);
+  validateComponentTurnIds(input, output);
+  validateEmptyTurns(input, output);
   validateOutputSize(output, limits);
   validateLocalKeys(output);
   validateReferences(input, output);
@@ -71,20 +74,64 @@ function validateOutputSize(
   output: AnalyzeTurnOutput,
   limits: AnalyzeTurnValidationLimits,
 ): void {
-  if (output.newComponents.length > limits.maxComponentsPerTurn) {
-    throw new InvalidAnalyzeTurnOutputError(
-      `Component count exceeds limit: ${limits.maxComponentsPerTurn}.`,
-    );
+  const componentsByTurn = new Map<string, typeof output.newComponents>();
+
+  for (const component of output.newComponents) {
+    const components = componentsByTurn.get(component.turnId) ?? [];
+    components.push(component);
+    componentsByTurn.set(component.turnId, components);
   }
 
-  const factCheckTargets = output.newComponents.filter(
-    (component) => component.requiresFactCheck,
+  for (const [turnId, components] of componentsByTurn) {
+    if (components.length > limits.maxComponentsPerTurn) {
+      throw new InvalidAnalyzeTurnOutputError(
+        `Component count exceeds per-turn limit for ${turnId}: ${limits.maxComponentsPerTurn}.`,
+      );
+    }
+
+    const factCheckTargetCount = components.filter(
+      (component) => component.requiresFactCheck,
+    ).length;
+
+    if (factCheckTargetCount > limits.maxFactCheckTargetsPerTurn) {
+      throw new InvalidAnalyzeTurnOutputError(
+        `Fact check target count exceeds per-turn limit for ${turnId}: ${limits.maxFactCheckTargetsPerTurn}.`,
+      );
+    }
+  }
+}
+
+function validateComponentTurnIds(
+  input: AnalyzeTurnInput,
+  output: AnalyzeTurnOutput,
+): void {
+  const currentTurnIds = new Set(input.currentTurns.map((turn) => turn.id));
+
+  for (const component of output.newComponents) {
+    if (!currentTurnIds.has(component.turnId)) {
+      throw new InvalidAnalyzeTurnOutputError(
+        `Component references unknown current turn: ${component.turnId}.`,
+      );
+    }
+  }
+}
+
+function validateEmptyTurns(
+  input: AnalyzeTurnInput,
+  output: AnalyzeTurnOutput,
+): void {
+  const emptyTurnIds = new Set(
+    input.currentTurns
+      .filter((turn) => turn.content.trim() === EMPTY_DEBATE_TURN_CONTENT)
+      .map((turn) => turn.id),
   );
 
-  if (factCheckTargets.length > limits.maxFactCheckTargetsPerTurn) {
-    throw new InvalidAnalyzeTurnOutputError(
-      `Fact check target count exceeds limit: ${limits.maxFactCheckTargetsPerTurn}.`,
-    );
+  for (const component of output.newComponents) {
+    if (emptyTurnIds.has(component.turnId)) {
+      throw new InvalidAnalyzeTurnOutputError(
+        `No component may be created for an empty debate turn: ${component.turnId}.`,
+      );
+    }
   }
 }
 
@@ -263,25 +310,28 @@ function validateMajorClaims(
     (component) => component.isMajorClaim,
   );
 
-  if (
-    newMajorClaims.length > 0 &&
-    input.currentTurn.phase !== DebatePhase.OPENING
-  ) {
-    throw new InvalidAnalyzeTurnOutputError(
-      "Major Claim is only allowed in OPENING phase.",
+  for (const turn of input.currentTurns) {
+    const turnMajorClaims = newMajorClaims.filter(
+      (component) => component.turnId === turn.id,
     );
-  }
 
-  const existingSpeakerMajorClaims = input.accumulatedGraph.components.filter(
-    (component) =>
-      component.speakerId === input.currentTurn.speakerId &&
-      component.isMajorClaim,
-  );
+    if (turnMajorClaims.length > 0 && turn.phase !== DebatePhase.OPENING) {
+      throw new InvalidAnalyzeTurnOutputError(
+        "Major Claim is only allowed in OPENING phase.",
+      );
+    }
 
-  if (existingSpeakerMajorClaims.length + newMajorClaims.length > 1) {
-    throw new InvalidAnalyzeTurnOutputError(
-      "A speaker can have at most one Major Claim in a debate.",
-    );
+    const existingSpeakerMajorClaimCount =
+      input.accumulatedGraph.components.filter(
+        (component) =>
+          component.speakerId === turn.speakerId && component.isMajorClaim,
+      ).length;
+
+    if (existingSpeakerMajorClaimCount + turnMajorClaims.length > 1) {
+      throw new InvalidAnalyzeTurnOutputError(
+        "A speaker can have at most one Major Claim in a debate.",
+      );
+    }
   }
 }
 

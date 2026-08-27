@@ -37,7 +37,7 @@ export function mapAnalyzeTurnOutputToEntities(
 
     return {
       id: componentId,
-      turnId: input.currentTurn.id,
+      turnId: component.turnId,
       isMajorClaim: component.isMajorClaim,
       statement: component.statement.trim(),
       requiresFactCheck: component.requiresFactCheck,

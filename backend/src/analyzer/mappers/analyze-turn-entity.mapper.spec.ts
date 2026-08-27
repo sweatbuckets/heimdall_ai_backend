@@ -16,15 +16,26 @@ describe("mapAnalyzeTurnOutputToEntities", () => {
         sideBSpeakerId: "speaker-b",
         rebuttalQuestionRounds: 2,
       },
-      currentTurn: {
-        id: "turn-1",
-        speakerId: "speaker-a",
-        speakerSide: DebateSide.SIDE_A,
-        phase: DebatePhase.OPENING,
-        round: 1,
-        sequence: 1,
-        content: "Content",
-      },
+      currentTurns: [
+        {
+          id: "turn-1",
+          speakerId: "speaker-a",
+          speakerSide: DebateSide.SIDE_A,
+          phase: DebatePhase.OPENING,
+          round: 1,
+          sequence: 1,
+          content: "Content A",
+        },
+        {
+          id: "turn-2",
+          speakerId: "speaker-b",
+          speakerSide: DebateSide.SIDE_B,
+          phase: DebatePhase.OPENING,
+          round: 1,
+          sequence: 2,
+          content: "Content B",
+        },
+      ],
       accumulatedGraph: {
         components: [],
         argumentalRelations: [],
@@ -35,12 +46,14 @@ describe("mapAnalyzeTurnOutputToEntities", () => {
       newComponents: [
         {
           localKey: "NEW_1",
+          turnId: "turn-1",
           statement: "  Major claim  ",
           isMajorClaim: true,
           requiresFactCheck: true,
         },
         {
           localKey: "NEW_2",
+          turnId: "turn-2",
           statement: "Reason",
           isMajorClaim: false,
           requiresFactCheck: false,
@@ -70,6 +83,7 @@ describe("mapAnalyzeTurnOutputToEntities", () => {
       requiresFactCheck: true,
     });
     expect(mapped.factCheckTargetComponentIds).toEqual([new1Id]);
+    expect(mapped.components[1]).toMatchObject({ turnId: "turn-2" });
     expect(mapped.argumentalRelations[0]).toMatchObject({
       fromComponentId: new2Id,
       toComponentId: new1Id,

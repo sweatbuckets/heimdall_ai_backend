@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_CLIENT } from "../ai/gemini/gemini.constants";
@@ -8,21 +8,27 @@ import { ANALYZE_TURN_RESPONSE_SCHEMA } from "../ai/schemas/analyze-turn.schema"
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
 import { validateAnalyzeTurnOutput } from "./validators/analyze-turn-output.validator";
 import { withAbortableTimeout } from "../ai/gemini/gemini-timeout.util";
+import { EMPTY_DEBATE_TURN_CONTENT } from "../debates/debate-turn-content.constants";
 
 const ANALYZER_SYSTEM_INSTRUCTION = [
   "You are a debate argument graph analyzer.",
-  "Analyze only currentTurn.content as the source of NEW components.",
+  "Analyze only currentTurns[].content as the source of NEW components.",
+  "currentTurns contains both speakers' turns for one debate round in sequence order.",
   "Use accumulatedGraph only as context and as possible EXISTING relation targets.",
   "Do not summarize the whole debate.",
-  "Do not invent claims that are not present in the current turn.",
+  "Do not invent claims that are not present in the current round.",
   "Return JSON only. Do not include markdown, commentary, or code fences.",
   "",
   "Component extraction rules:",
-  "- In OPENING phase, identify the speaker's central position about debate.topic and create exactly one Major Claim unless the current speaker already has one in accumulatedGraph.",
-  "- The OPENING Major Claim should be the first new component, using localKey NEW_1.",
-  "- The Major Claim should be a concise proposition derived from currentTurn.content and debate.topic.",
+  "- Set turnId to the exact currentTurns[].id that contains the source statement.",
+  "- Every NEW component must belong to exactly one current turn.",
+  `- If a turn's trimmed content is exactly \"${EMPTY_DEBATE_TURN_CONTENT}\", create no components, relations, or fact-check targets for that turn. Continue analyzing the other turn normally.`,
+  "- Do not expect the user to explicitly label or format a Major Claim.",
+  "- In OPENING phase, infer at most one Major Claim only when the content expresses a clear central position about debate.topic.",
+  "- Do not create a Major Claim from a greeting, filler, small talk, a mere topic mention, or content without a clear position.",
+  "- Each Major Claim should be a concise proposition derived from its currentTurns[].content and debate.topic.",
   "- Do not create a Major Claim outside OPENING phase.",
-  "- If the current speaker already has a Major Claim in accumulatedGraph, do not create another Major Claim.",
+  "- If either current speaker already has a Major Claim in accumulatedGraph, do not create another Major Claim for that speaker.",
   "- Extract supporting components for reasons, evidence, explanations, examples, or causal arguments.",
   "- Extract rebuttal components for objections, challenges, refutations, or counterexamples.",
   "- Keep each statement concise and meaningful as a standalone proposition.",
@@ -54,7 +60,10 @@ const ANALYZER_SYSTEM_INSTRUCTION = [
   "Korean debate interpretation notes:",
   "- The Korean expressions below are strong semantic signals, not exhaustive keyword lists.",
   "- Classify any sentence with the same discourse intent the same way, even if it does not use the exact listed words.",
-  "- OPENING에서는 debate.topic에 대한 발언자의 핵심 입장을 먼저 하나의 Major Claim으로 정리한다.",
+  `- 내용이 정확히 '${EMPTY_DEBATE_TURN_CONTENT}'이면 해당 턴에서는 컴포넌트, 관계, 팩트체크 대상을 만들지 않는다.`,
+  "- OPENING에서는 사용자가 Major Claim 형식을 직접 작성할 것으로 가정하지 않는다.",
+  "- OPENING 내용에 debate.topic에 대한 명확한 핵심 입장이 표현된 경우에만 최대 하나의 Major Claim으로 추출한다.",
+  "- 인사, 잡담, 단순 주제 언급처럼 명확한 입장이 없으면 Major Claim을 만들지 않는다.",
   "- '근거', '이유', '왜냐하면', '예를 들어', '따라서'처럼 다른 명제를 뒷받침하거나 정당화하는 의도는 SUPPORTS 관계 후보로 본다.",
   "- '반박', '하지만', '그러나', '그건 아니다', '동의하기 어렵다'처럼 다른 명제를 약화, 부정, 반례 제시, 문제 제기하는 의도는 ATTACKS 관계 후보로 본다.",
   "- '정말인가?', '근거가 무엇인가?', '어떻게 설명하는가?'처럼 증거, 설명, 명확화, 정당화를 요구하는 의도는 QUESTIONS 관계 후보로 본다.",
@@ -65,6 +74,8 @@ const ANALYZER_SYSTEM_INSTRUCTION = [
 
 @Injectable()
 export class AnalyzerAiService {
+  private readonly logger = new Logger(AnalyzerAiService.name);
+
   constructor(
     @Inject(GEMINI_CLIENT)
     private readonly gemini: GoogleGenAI,
@@ -111,14 +122,42 @@ export class AnalyzerAiService {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const startedAt = Date.now();
       try {
-        return await withAbortableTimeout(
+        const result = await withAbortableTimeout(
           (signal) => this.generate(model, input, signal),
           timeoutMs,
           "Gemini analyzer request timed out.",
           abortSignal,
         );
+        const usage = result.usageMetadata;
+        this.logger.log(
+          [
+            "Gemini analyzer request completed.",
+            `debateId=${input.debate.id}`,
+            `turnIds=${input.currentTurns.map((turn) => turn.id).join(",")}`,
+            `phase=${input.currentTurns[0]?.phase ?? "UNKNOWN"}`,
+            `round=${input.currentTurns[0]?.round ?? "UNKNOWN"}`,
+            `attempt=${attempt + 1}`,
+            `durationMs=${Date.now() - startedAt}`,
+            `inputTokens=${usage?.promptTokenCount ?? "unknown"}`,
+            `outputTokens=${usage?.candidatesTokenCount ?? "unknown"}`,
+            `thinkingTokens=${usage?.thoughtsTokenCount ?? "unknown"}`,
+            `totalTokens=${usage?.totalTokenCount ?? "unknown"}`,
+          ].join(" "),
+        );
+        return parseRequiredJson<AnalyzeTurnOutput>(result.text);
       } catch (error) {
+        this.logger.warn(
+          [
+            "Gemini analyzer request failed.",
+            `debateId=${input.debate.id}`,
+            `turnIds=${input.currentTurns.map((turn) => turn.id).join(",")}`,
+            `attempt=${attempt + 1}`,
+            `durationMs=${Date.now() - startedAt}`,
+            `error=${error instanceof Error ? error.message : String(error)}`,
+          ].join(" "),
+        );
         if (abortSignal?.aborted) throw error;
         lastError = error;
 
@@ -135,7 +174,7 @@ export class AnalyzerAiService {
     model: string,
     input: AnalyzeTurnInput,
     abortSignal?: AbortSignal,
-  ): Promise<AnalyzeTurnOutput> {
+  ) {
     const response = await this.gemini.models.generateContent({
       model,
       contents: [
@@ -157,7 +196,7 @@ export class AnalyzerAiService {
       },
     });
 
-    return parseRequiredJson<AnalyzeTurnOutput>(response.text);
+    return response;
   }
 }
 

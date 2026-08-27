@@ -35,6 +35,7 @@ import {
   getDebateTurnLimitMs,
   getDebateTurnLimitSeconds,
 } from "./debate-turn-time-limit";
+import { EMPTY_DEBATE_TURN_CONTENT } from "../debates/debate-turn-content.constants";
 
 interface DebateDraftScope {
   debateId: string;
@@ -801,7 +802,7 @@ function createEmptyTurnDraft(
     speakerSide: scope.speakerSide,
     phase: scope.phase as DebatePhase,
     round: scope.round,
-    content: "발언 없음",
+    content: EMPTY_DEBATE_TURN_CONTENT,
     createdAt: new Date().toISOString(),
   };
 }

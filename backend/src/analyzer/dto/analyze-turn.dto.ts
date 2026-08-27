@@ -37,7 +37,7 @@ export interface AnalyzeTurnInput {
     sideBSpeakerId: string;
     rebuttalQuestionRounds: number;
   };
-  currentTurn: {
+  currentTurns: Array<{
     id: string;
     speakerId: string;
     speakerSide: DebateSide;
@@ -45,7 +45,7 @@ export interface AnalyzeTurnInput {
     round: number;
     sequence: number;
     content: string;
-  };
+  }>;
   accumulatedGraph: {
     components: ExistingComponent[];
     argumentalRelations: ExistingArgumentalRelation[];
@@ -69,6 +69,7 @@ export type RelationTargetRef = NewComponentRef | ExistingComponentRef;
 
 export interface NewComponent {
   localKey: NewComponentLocalKey;
+  turnId: string;
   statement: string;
   isMajorClaim: boolean;
   requiresFactCheck: boolean;

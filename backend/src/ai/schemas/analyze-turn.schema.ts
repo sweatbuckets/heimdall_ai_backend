@@ -14,12 +14,14 @@ export const ANALYZE_TURN_RESPONSE_SCHEMA = {
         additionalProperties: false,
         required: [
           "localKey",
+          "turnId",
           "statement",
           "isMajorClaim",
           "requiresFactCheck",
         ],
         properties: {
           localKey: { type: "string" },
+          turnId: { type: "string" },
           statement: { type: "string" },
           isMajorClaim: { type: "boolean" },
           requiresFactCheck: { type: "boolean" },

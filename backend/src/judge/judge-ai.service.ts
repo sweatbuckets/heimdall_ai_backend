@@ -11,6 +11,7 @@ import {
 } from "./constants";
 import { JudgeInput, JudgeOutput } from "./dto/judge.dto";
 import { validateJudgeOutput } from "./validators/judge-output.validator";
+import { withAbortableTimeout } from "../ai/gemini/gemini-timeout.util";
 
 const JUDGE_SYSTEM_INSTRUCTION = [
   "You evaluate a completed debate using its argument graph and fact-check results.",
@@ -76,10 +77,11 @@ export class JudgeAiService {
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
-        return await withTimeout(
-          this.generate(model, input, abortSignal),
+        return await withAbortableTimeout(
+          (signal) => this.generate(model, input, signal),
           timeoutMs,
           "Gemini judge request timed out.",
+          abortSignal,
         );
       } catch (error) {
         if (abortSignal?.aborted) throw error;
@@ -129,25 +131,5 @@ function assertGeminiApiKey(configService: ConfigService): void {
     throw new GeminiConfigurationError(
       "GEMINI_API_KEY is required for Judge AI calls.",
     );
-  }
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }

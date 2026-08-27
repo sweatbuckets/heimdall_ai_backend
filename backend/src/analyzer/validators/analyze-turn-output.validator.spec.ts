@@ -7,6 +7,7 @@ import {
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "../dto/analyze-turn.dto";
 import { InvalidAnalyzeTurnOutputError } from "../errors/analyzer.errors";
 import { validateAnalyzeTurnOutput } from "./analyze-turn-output.validator";
+import { EMPTY_DEBATE_TURN_CONTENT } from "../../debates/debate-turn-content.constants";
 
 describe("validateAnalyzeTurnOutput", () => {
   const input: AnalyzeTurnInput = {
@@ -17,15 +18,26 @@ describe("validateAnalyzeTurnOutput", () => {
       sideBSpeakerId: "speaker-b",
       rebuttalQuestionRounds: 2,
     },
-    currentTurn: {
-      id: "turn-1",
-      speakerId: "speaker-a",
-      speakerSide: DebateSide.SIDE_A,
-      phase: DebatePhase.OPENING,
-      round: 1,
-      sequence: 1,
-      content: "Attendance should not count toward grades.",
-    },
+    currentTurns: [
+      {
+        id: "turn-1",
+        speakerId: "speaker-a",
+        speakerSide: DebateSide.SIDE_A,
+        phase: DebatePhase.OPENING,
+        round: 1,
+        sequence: 1,
+        content: "Attendance should not count toward grades.",
+      },
+      {
+        id: "turn-2",
+        speakerId: "speaker-b",
+        speakerSide: DebateSide.SIDE_B,
+        phase: DebatePhase.OPENING,
+        round: 1,
+        sequence: 2,
+        content: "Attendance should count toward grades.",
+      },
+    ],
     accumulatedGraph: {
       components: [
         {
@@ -50,6 +62,7 @@ describe("validateAnalyzeTurnOutput", () => {
       newComponents: [
         {
           localKey: "NEW_1",
+          turnId: "turn-1",
           statement: "Attendance does not prove active participation.",
           isMajorClaim: false,
           requiresFactCheck: false,
@@ -73,6 +86,7 @@ describe("validateAnalyzeTurnOutput", () => {
       newComponents: [
         {
           localKey: "NEW_0",
+          turnId: "turn-1",
           statement: "Invalid key.",
           isMajorClaim: true,
           requiresFactCheck: false,
@@ -92,6 +106,7 @@ describe("validateAnalyzeTurnOutput", () => {
       newComponents: [
         {
           localKey: "NEW_1",
+          turnId: "turn-1",
           statement: "A connected component.",
           isMajorClaim: false,
           requiresFactCheck: false,
@@ -117,6 +132,7 @@ describe("validateAnalyzeTurnOutput", () => {
       newComponents: [
         {
           localKey: "NEW_1",
+          turnId: "turn-1",
           statement: "A connected component.",
           isMajorClaim: false,
           requiresFactCheck: false,
@@ -147,6 +163,7 @@ describe("validateAnalyzeTurnOutput", () => {
       newComponents: [
         {
           localKey: "NEW_1",
+          turnId: "turn-1",
           statement: "Attendance records can be inaccurate.",
           isMajorClaim: false,
           requiresFactCheck: true,
@@ -159,17 +176,124 @@ describe("validateAnalyzeTurnOutput", () => {
     expect(() => validateAnalyzeTurnOutput(input, output)).not.toThrow();
   });
 
+  it("allows an empty turn while analyzing the other speaker normally", () => {
+    const inputWithEmptyTurn: AnalyzeTurnInput = {
+      ...input,
+      currentTurns: [
+        { ...input.currentTurns[0], content: EMPTY_DEBATE_TURN_CONTENT },
+        input.currentTurns[1],
+      ],
+    };
+    const output: AnalyzeTurnOutput = {
+      newComponents: [
+        {
+          localKey: "NEW_1",
+          turnId: "turn-2",
+          statement: "Attendance encourages participation.",
+          isMajorClaim: false,
+          requiresFactCheck: false,
+        },
+      ],
+      newArgumentalRelations: [],
+      newInteractionalRelations: [],
+    };
+
+    expect(() =>
+      validateAnalyzeTurnOutput(inputWithEmptyTurn, output),
+    ).not.toThrow();
+  });
+
+  it("rejects components created for an empty turn", () => {
+    const inputWithEmptyTurn: AnalyzeTurnInput = {
+      ...input,
+      currentTurns: [
+        { ...input.currentTurns[0], content: EMPTY_DEBATE_TURN_CONTENT },
+        input.currentTurns[1],
+      ],
+    };
+    const output: AnalyzeTurnOutput = {
+      newComponents: [
+        {
+          localKey: "NEW_1",
+          turnId: "turn-1",
+          statement: "The speaker did not make a statement.",
+          isMajorClaim: false,
+          requiresFactCheck: false,
+        },
+      ],
+      newArgumentalRelations: [],
+      newInteractionalRelations: [],
+    };
+
+    expect(() => validateAnalyzeTurnOutput(inputWithEmptyTurn, output)).toThrow(
+      InvalidAnalyzeTurnOutputError,
+    );
+  });
+
+  it("applies component limits independently to each turn in the round", () => {
+    const output: AnalyzeTurnOutput = {
+      newComponents: [
+        {
+          localKey: "NEW_1",
+          turnId: "turn-1",
+          statement: "Side A component.",
+          isMajorClaim: false,
+          requiresFactCheck: false,
+        },
+        {
+          localKey: "NEW_2",
+          turnId: "turn-2",
+          statement: "Side B component.",
+          isMajorClaim: false,
+          requiresFactCheck: false,
+        },
+      ],
+      newArgumentalRelations: [],
+      newInteractionalRelations: [],
+    };
+
+    expect(() =>
+      validateAnalyzeTurnOutput(input, output, {
+        maxComponentsPerTurn: 1,
+        maxFactCheckTargetsPerTurn: 1,
+        maxComponentStatementLength: 1000,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects components assigned to a turn outside the current round", () => {
+    const output: AnalyzeTurnOutput = {
+      newComponents: [
+        {
+          localKey: "NEW_1",
+          turnId: "turn-unknown",
+          statement: "Unknown source.",
+          isMajorClaim: false,
+          requiresFactCheck: false,
+        },
+      ],
+      newArgumentalRelations: [],
+      newInteractionalRelations: [],
+    };
+
+    expect(() => validateAnalyzeTurnOutput(input, output)).toThrow(
+      InvalidAnalyzeTurnOutputError,
+    );
+  });
+
   it("rejects conflicting interactional relations", () => {
     const output: AnalyzeTurnOutput = {
       newComponents: [
         {
           localKey: "NEW_1",
+          turnId: "turn-1",
           statement: "How does attendance prove learning?",
           isMajorClaim: false,
           requiresFactCheck: false,
         },
         {
           localKey: "NEW_2",
+          turnId: "turn-2",
           statement: "It does not prove learning by itself.",
           isMajorClaim: false,
           requiresFactCheck: false,

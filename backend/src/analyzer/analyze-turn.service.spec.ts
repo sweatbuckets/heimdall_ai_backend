@@ -5,10 +5,7 @@ import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import { AnalyzeTurnService } from "./analyze-turn.service";
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
-import {
-  AnalyzeTurnConflictError,
-  AnalyzeTurnDependencyPendingError,
-} from "./errors/analyzer.errors";
+import { AnalyzeTurnDependencyPendingError } from "./errors/analyzer.errors";
 import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
 import {
   DebatePhase,
@@ -80,6 +77,7 @@ class MockRepository<T extends object> {
   constructor(
     private readonly findOneResult: T | null,
     private readonly countResult = 0,
+    private readonly findResult: T[] = [],
   ) {}
 
   async findOne(_options: object): Promise<T | null> {
@@ -89,26 +87,52 @@ class MockRepository<T extends object> {
   async count(_options: object): Promise<number> {
     return this.countResult;
   }
+
+  async find(_options: object): Promise<T[]> {
+    return this.findResult;
+  }
 }
 
 class MockDataSource {
   public readonly allRootQueryBuilders: MockUpdateQueryBuilder[];
   public readonly rootQueryBuilders: MockUpdateQueryBuilder[];
   public readonly manager: MockEntityManager;
+  private readonly turn: Partial<DebateTurnEntity> | null;
+  private readonly roundTurns: Array<Partial<DebateTurnEntity>>;
 
   constructor(
     rootAffectedResults: number[],
-    private readonly turn: Partial<DebateTurnEntity> | null = null,
+    turn: Partial<DebateTurnEntity> | null = null,
     private readonly componentCount = 0,
     private readonly factCheckTask: Partial<FactCheckBatchTaskEntity> | null = null,
-    completionAffected = 1,
+    completionAffected = 2,
     private readonly incompleteEarlierTurnCount = 0,
+    roundTurns?: Array<Partial<DebateTurnEntity>>,
   ) {
     this.allRootQueryBuilders = rootAffectedResults.map(
       (affected) => new MockUpdateQueryBuilder(affected),
     );
     this.rootQueryBuilders = [...this.allRootQueryBuilders];
     this.manager = new MockEntityManager(completionAffected);
+    this.turn = turn ?? {
+      id: "turn-1",
+      debateId: "debate-1",
+      phase: DebatePhase.OPENING,
+      round: 1,
+      sequence: 1,
+      analysisStatus: DebateTurnAnalysisStatus.PENDING,
+    };
+    this.roundTurns = roundTurns ?? [
+      this.turn,
+      {
+        id: "turn-2",
+        debateId: "debate-1",
+        phase: DebatePhase.OPENING,
+        round: 1,
+        sequence: 2,
+        analysisStatus: DebateTurnAnalysisStatus.PENDING,
+      },
+    ];
   }
 
   createQueryBuilder(): MockUpdateQueryBuilder {
@@ -123,7 +147,11 @@ class MockDataSource {
 
   getRepository(entity: unknown): MockRepository<object> {
     if (entity === DebateTurnEntity) {
-      return new MockRepository(this.turn, this.incompleteEarlierTurnCount);
+      return new MockRepository(
+        this.turn,
+        this.incompleteEarlierTurnCount,
+        this.roundTurns,
+      );
     }
 
     if (entity === ArgumentComponentEntity) {
@@ -160,15 +188,26 @@ describe("AnalyzeTurnService", () => {
       sideBSpeakerId: "speaker-b",
       rebuttalQuestionRounds: 2,
     },
-    currentTurn: {
-      id: turnId,
-      speakerId: "speaker-a",
-      speakerSide: DebateSide.SIDE_A,
-      phase: DebatePhase.OPENING,
-      round: 1,
-      sequence: 1,
-      content: "Attendance should not count toward grades.",
-    },
+    currentTurns: [
+      {
+        id: turnId,
+        speakerId: "speaker-a",
+        speakerSide: DebateSide.SIDE_A,
+        phase: DebatePhase.OPENING,
+        round: 1,
+        sequence: 1,
+        content: "Attendance should not count toward grades.",
+      },
+      {
+        id: "turn-2",
+        speakerId: "speaker-b",
+        speakerSide: DebateSide.SIDE_B,
+        phase: DebatePhase.OPENING,
+        round: 1,
+        sequence: 2,
+        content: "Attendance should count toward grades.",
+      },
+    ],
     accumulatedGraph: {
       components: [],
       argumentalRelations: [],
@@ -187,6 +226,7 @@ describe("AnalyzeTurnService", () => {
     aiService: {
       analyze: jest.Mock<Promise<AnalyzeTurnOutput>, [AnalyzeTurnInput]>;
     };
+    queue: { add: jest.Mock };
   } {
     const assembler = {
       assemble: jest
@@ -199,7 +239,7 @@ describe("AnalyzeTurnService", () => {
         .mockResolvedValue(emptyOutput),
     };
     const queue = {
-      add: jest.fn(),
+      add: jest.fn().mockResolvedValue({ id: "fact-check-job-1" }),
     };
 
     return {
@@ -216,6 +256,7 @@ describe("AnalyzeTurnService", () => {
       ),
       assembler,
       aiService,
+      queue,
     };
   }
 
@@ -229,8 +270,8 @@ describe("AnalyzeTurnService", () => {
     } as Job<AnalyzeTurnJobData>;
   }
 
-  it("claims a PENDING turn and completes empty analyzer output in one transaction", async () => {
-    const dataSource = new MockDataSource([1]);
+  it("claims both PENDING turns and completes a round in one transaction", async () => {
+    const dataSource = new MockDataSource([2]);
     const { service, assembler, aiService } = createService(dataSource);
 
     const result = await service.analyzeTurn(turnId);
@@ -256,7 +297,7 @@ describe("AnalyzeTurnService", () => {
     });
   });
 
-  it("rejects a PROCESSING turn when the conditional claim update affects no rows", async () => {
+  it("waits when another job is processing the same round", async () => {
     const dataSource = new MockDataSource([0], {
       id: turnId,
       analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
@@ -264,7 +305,7 @@ describe("AnalyzeTurnService", () => {
     const { service, assembler, aiService } = createService(dataSource);
 
     await expect(service.analyzeTurn(turnId)).rejects.toThrow(
-      AnalyzeTurnConflictError,
+      AnalyzeTurnDependencyPendingError,
     );
     expect(assembler.assemble).not.toHaveBeenCalled();
     expect(aiService.analyze).not.toHaveBeenCalled();
@@ -291,6 +332,75 @@ describe("AnalyzeTurnService", () => {
     );
     expect(assembler.assemble).not.toHaveBeenCalled();
     expect(aiService.analyze).not.toHaveBeenCalled();
+  });
+
+  it("waits for the other speaker before analyzing a round", async () => {
+    const onlyTurn = {
+      id: turnId,
+      debateId: "debate-1",
+      phase: DebatePhase.OPENING,
+      round: 1,
+      sequence: 1,
+      analysisStatus: DebateTurnAnalysisStatus.PENDING,
+    };
+    const dataSource = new MockDataSource([], onlyTurn, 0, null, 2, 0, [
+      onlyTurn,
+    ]);
+    const { service, assembler, aiService } = createService(dataSource);
+
+    await expect(service.analyzeTurn(turnId)).rejects.toThrow(
+      AnalyzeTurnDependencyPendingError,
+    );
+    expect(assembler.assemble).not.toHaveBeenCalled();
+    expect(aiService.analyze).not.toHaveBeenCalled();
+  });
+
+  it("stores both source turns and creates one bounded fact-check batch per turn", async () => {
+    const dataSource = new MockDataSource([2, 1, 1]);
+    const { service, aiService, queue } = createService(dataSource);
+    aiService.analyze.mockResolvedValue({
+      newComponents: [
+        {
+          localKey: "NEW_1",
+          turnId: "turn-1",
+          statement: "Side A claim",
+          isMajorClaim: true,
+          requiresFactCheck: true,
+        },
+        {
+          localKey: "NEW_2",
+          turnId: "turn-2",
+          statement: "Side B claim",
+          isMajorClaim: true,
+          requiresFactCheck: true,
+        },
+      ],
+      newArgumentalRelations: [],
+      newInteractionalRelations: [],
+    });
+
+    const result = await service.analyzeTurn(turnId);
+
+    const componentInsert = dataSource.manager.inserts.find(
+      ({ entity }) => entity === ArgumentComponentEntity,
+    );
+    expect(componentInsert?.values).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ turnId: "turn-1" }),
+        expect.objectContaining({ turnId: "turn-2" }),
+      ]),
+    );
+    const taskInserts = dataSource.manager.inserts.filter(
+      ({ entity }) => entity === FactCheckBatchTaskEntity,
+    );
+    expect(taskInserts.map(({ values }) => values)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ turnId: "turn-1" }),
+        expect.objectContaining({ turnId: "turn-2" }),
+      ]),
+    );
+    expect(queue.add).toHaveBeenCalledTimes(2);
+    expect(result.componentCount).toBe(2);
   });
 
   it("returns skipped for a COMPLETED turn without calling Gemini again", async () => {
@@ -320,7 +430,7 @@ describe("AnalyzeTurnService", () => {
   });
 
   it("resets PROCESSING turn to PENDING when analyzer fails before final attempt", async () => {
-    const dataSource = new MockDataSource([1, 1]);
+    const dataSource = new MockDataSource([2, 2]);
     const { service, aiService } = createService(dataSource);
     aiService.analyze.mockRejectedValue(new Error("temporary analyzer error"));
 
@@ -335,7 +445,7 @@ describe("AnalyzeTurnService", () => {
   });
 
   it("marks PROCESSING turn as FAILED when analyzer fails on final attempt", async () => {
-    const dataSource = new MockDataSource([1, 1]);
+    const dataSource = new MockDataSource([2, 2]);
     const { service, aiService } = createService(dataSource);
     aiService.analyze.mockRejectedValue(new Error("final analyzer error"));
 

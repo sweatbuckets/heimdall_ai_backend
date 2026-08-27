@@ -3,7 +3,7 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Job, Queue } from "bullmq";
-import { DataSource, LessThan, Not } from "typeorm";
+import { DataSource } from "typeorm";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import {
@@ -69,9 +69,9 @@ export class AnalyzeTurnService {
     turnId: string,
     job?: Job<AnalyzeTurnJobData>,
   ): Promise<AnalyzeTurnResult> {
-    const claimed = await this.claimTurnForAnalysis(turnId);
+    const claimedTurnIds = await this.claimRoundForAnalysis(turnId);
 
-    if (!claimed) {
+    if (!claimedTurnIds) {
       return this.handleUnclaimedTurn(turnId);
     }
 
@@ -85,7 +85,7 @@ export class AnalyzeTurnService {
       validateAnalyzeTurnOutput(input, output, limits);
 
       const mapping = mapAnalyzeTurnOutputToEntities(input, output);
-      let factCheckBatchTaskId: string | null = null;
+      const factCheckBatchTaskIds: string[] = [];
 
       await this.dataSource.transaction(async (manager) => {
         const debate = await manager.findOne(DebateEntity, {
@@ -114,21 +114,41 @@ export class AnalyzeTurnService {
           );
         }
 
-        if (mapping.factCheckTargetComponentIds.length > 0) {
-          factCheckBatchTaskId = randomUUID();
+        for (const currentTurn of input.currentTurns) {
+          const targetComponentIds = output.newComponents
+            .filter(
+              (component) =>
+                component.turnId === currentTurn.id &&
+                component.requiresFactCheck,
+            )
+            .map((component) => {
+              const componentId = mapping.localKeyToComponentId.get(
+                component.localKey,
+              );
+              if (!componentId) {
+                throw new AnalyzeTurnConflictError(
+                  `Fact-check target component mapping is missing: ${component.localKey}.`,
+                );
+              }
+              return componentId;
+            });
+
+          if (targetComponentIds.length === 0) {
+            continue;
+          }
+
+          const factCheckBatchTaskId = randomUUID();
+          factCheckBatchTaskIds.push(factCheckBatchTaskId);
 
           await manager.insert(FactCheckBatchTaskEntity, {
             id: factCheckBatchTaskId,
-            turnId,
+            turnId: currentTurn.id,
             status: FactCheckBatchTaskStatus.PENDING,
           });
 
           await manager.insert(
             FactCheckBatchTargetEntity,
-            mapFactCheckTargets(
-              factCheckBatchTaskId,
-              mapping.factCheckTargetComponentIds,
-            ),
+            mapFactCheckTargets(factCheckBatchTaskId, targetComponentIds),
           );
         }
 
@@ -139,21 +159,23 @@ export class AnalyzeTurnService {
             analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
             analysisProcessingStartedAt: null,
           })
-          .where("id = :turnId", { turnId })
+          .where("id IN (:...turnIds)", { turnIds: claimedTurnIds })
           .andWhere("analysis_status = :status", {
             status: DebateTurnAnalysisStatus.PROCESSING,
           })
           .execute();
 
-        if (completeResult.affected !== 1) {
+        if (completeResult.affected !== claimedTurnIds.length) {
           throw new AnalyzeTurnConflictError(
-            `DebateTurn analysis completion state changed: ${turnId}.`,
+            `Debate round analysis completion state changed: ${claimedTurnIds.join(",")}.`,
           );
         }
       });
 
-      if (factCheckBatchTaskId && this.isFactCheckEnabled()) {
-        await this.enqueueFactCheckBatch(factCheckBatchTaskId);
+      if (this.isFactCheckEnabled()) {
+        for (const factCheckBatchTaskId of factCheckBatchTaskIds) {
+          await this.enqueueFactCheckBatch(factCheckBatchTaskId);
+        }
       }
 
       await this.judgeReadinessService.tryStartJudge(input.debate.id);
@@ -163,11 +185,11 @@ export class AnalyzeTurnService {
         componentCount: mapping.components.length,
         argumentalRelationCount: mapping.argumentalRelations.length,
         interactionalRelationCount: mapping.interactionalRelations.length,
-        factCheckBatchTaskId,
+        factCheckBatchTaskId: factCheckBatchTaskIds[0] ?? null,
         skipped: false,
       };
     } catch (error) {
-      await this.releaseOrFailTurnAnalysis(turnId, job);
+      await this.releaseOrFailRoundAnalysis(claimedTurnIds, job);
       if (error instanceof AiInvocationCancelledError) {
         return {
           turnId,
@@ -182,7 +204,33 @@ export class AnalyzeTurnService {
     }
   }
 
-  private async claimTurnForAnalysis(turnId: string): Promise<boolean> {
+  private async claimRoundForAnalysis(
+    turnId: string,
+  ): Promise<string[] | null> {
+    const turnRepository = this.dataSource.getRepository(DebateTurnEntity);
+    const requestedTurn = await turnRepository.findOne({
+      where: { id: turnId },
+    });
+
+    if (!requestedTurn) {
+      throw new AnalyzeTurnInputError(`DebateTurn not found: ${turnId}.`);
+    }
+
+    const roundTurns = await turnRepository.find({
+      where: {
+        debateId: requestedTurn.debateId,
+        phase: requestedTurn.phase,
+        round: requestedTurn.round,
+      },
+      order: { sequence: "ASC" },
+    });
+
+    if (roundTurns.length !== 2) {
+      return null;
+    }
+
+    const turnIds = roundTurns.map((turn) => turn.id);
+    const firstSequence = roundTurns[0].sequence;
     const result = await this.dataSource
       .createQueryBuilder()
       .update(DebateTurnEntity)
@@ -190,23 +238,36 @@ export class AnalyzeTurnService {
         analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
         analysisProcessingStartedAt: new Date(),
       })
-      .where("id = :turnId", { turnId })
+      .where("id IN (:...turnIds)", { turnIds })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PENDING,
       })
       .andWhere(
         `NOT EXISTS (
           SELECT 1
+          FROM "debate_turn" "round_turn"
+          WHERE "round_turn"."id" IN (:...turnIds)
+            AND "round_turn"."analysis_status" <> :pendingStatus
+        )`,
+        { pendingStatus: DebateTurnAnalysisStatus.PENDING },
+      )
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
           FROM "debate_turn" "previous_turn"
-          WHERE "previous_turn"."debate_id" = "debate_turn"."debate_id"
-            AND "previous_turn"."sequence" < "debate_turn"."sequence"
+          WHERE "previous_turn"."debate_id" = :debateId
+            AND "previous_turn"."sequence" < :firstSequence
             AND "previous_turn"."analysis_status" <> :completedStatus
         )`,
-        { completedStatus: DebateTurnAnalysisStatus.COMPLETED },
+        {
+          debateId: requestedTurn.debateId,
+          firstSequence,
+          completedStatus: DebateTurnAnalysisStatus.COMPLETED,
+        },
       )
       .execute();
 
-    return result.affected === 1;
+    return result.affected === turnIds.length ? turnIds : null;
   }
 
   private async handleUnclaimedTurn(
@@ -225,14 +286,8 @@ export class AnalyzeTurnService {
     }
 
     if (
-      turn.analysisStatus === DebateTurnAnalysisStatus.PENDING &&
-      (await this.dataSource.getRepository(DebateTurnEntity).count({
-        where: {
-          debateId: turn.debateId,
-          sequence: LessThan(turn.sequence),
-          analysisStatus: Not(DebateTurnAnalysisStatus.COMPLETED),
-        },
-      })) > 0
+      turn.analysisStatus === DebateTurnAnalysisStatus.PENDING ||
+      turn.analysisStatus === DebateTurnAnalysisStatus.PROCESSING
     ) {
       throw new AnalyzeTurnDependencyPendingError(turnId);
     }
@@ -288,8 +343,8 @@ export class AnalyzeTurnService {
     };
   }
 
-  private async releaseOrFailTurnAnalysis(
-    turnId: string,
+  private async releaseOrFailRoundAnalysis(
+    turnIds: string[],
     job: Job<AnalyzeTurnJobData> | undefined,
   ): Promise<void> {
     const nextStatus = this.isFinalAttempt(job)
@@ -303,7 +358,7 @@ export class AnalyzeTurnService {
         analysisStatus: nextStatus,
         analysisProcessingStartedAt: null,
       })
-      .where("id = :turnId", { turnId })
+      .where("id IN (:...turnIds)", { turnIds })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PROCESSING,
       })
