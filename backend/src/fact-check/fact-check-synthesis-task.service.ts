@@ -6,6 +6,7 @@ import {
   AiInvocationCancellationService,
   AiInvocationCancelledError,
 } from "../ai/ai-invocation-cancellation.service";
+import { DebatePipelineEventBus } from "../ai/debate-pipeline-event-bus";
 import {
   DebateStatus,
   FactCheckBatchStatus,
@@ -47,6 +48,7 @@ export class FactCheckSynthesisTaskService {
     private readonly aiService: FactCheckerAiService,
     private readonly configService: ConfigService,
     private readonly cancellationService: AiInvocationCancellationService,
+    private readonly pipelineEventBus: DebatePipelineEventBus,
   ) {}
 
   async process(
@@ -102,6 +104,17 @@ export class FactCheckSynthesisTaskService {
         new Date(),
       );
       await this.completeSynthesis(taskId, entities);
+      const completedTask = await this.dataSource
+        .getRepository(FactCheckStageTaskEntity)
+        .findOne({ where: { id: taskId }, relations: { factCheckBatch: true } });
+      if (completedTask?.factCheckBatch) {
+        this.pipelineEventBus.publish({
+          type: "fact-check.completed",
+          debateId: completedTask.factCheckBatch.debateId,
+          factCheckBatchId: completedTask.factCheckBatchId,
+          occurredAt: new Date().toISOString(),
+        });
+      }
     } catch (error) {
       await this.handleFailure(taskId, job, error);
       if (

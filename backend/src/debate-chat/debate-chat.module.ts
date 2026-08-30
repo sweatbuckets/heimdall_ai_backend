@@ -9,9 +9,10 @@ import { DebateChatController } from "./debate-chat.controller";
 import { DebateChatService } from "./debate-chat.service";
 import { DebateChatWebSocketServer } from "./debate-chat.websocket-server";
 import { DebateTurnTimeoutScheduler } from "./debate-turn-timeout.scheduler";
+import { AiInvocationModule } from "../ai/ai-invocation.module";
 
 @Module({
-  imports: [AnalyzerModule, AuthModule, CommunityChatModule],
+  imports: [AnalyzerModule, AuthModule, CommunityChatModule, AiInvocationModule],
   controllers: [DebateChatController],
   providers: [
     {

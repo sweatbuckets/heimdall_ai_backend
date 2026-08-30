@@ -7,6 +7,7 @@ import {
   OnApplicationShutdown,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { DebateProcessingEventBus } from "../ai/debate-processing-event-bus";
 import { AuthService } from "../auth/auth.service";
 import { extractBearerToken } from "../auth/jwt-auth.guard";
 import { CommunityChatService } from "../community-chat/community-chat.service";
@@ -66,9 +67,13 @@ export class DebateChatWebSocketServer
     private readonly authService: AuthService,
     private readonly communityChatService: CommunityChatService,
     private readonly communityNotificationService: CommunityNotificationService,
+    private readonly processingEventBus: DebateProcessingEventBus,
   ) {}
 
   onApplicationBootstrap(): void {
+    this.processingEventBus.subscribe((event) => {
+      this.broadcast(event.debateId, event);
+    });
     const port = this.configService.get<number>(
       "DEBATE_CHAT_WS_PORT",
       DEFAULT_DEBATE_CHAT_WS_PORT,

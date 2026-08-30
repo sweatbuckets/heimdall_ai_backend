@@ -10,6 +10,7 @@ import { AnalyzeTurnService } from "../analyze-turn.service";
 import { AnalyzeRoundJobData } from "./analyzer-job.data";
 import { AnalyzeTurnDependencyPendingError } from "../errors/analyzer.errors";
 import { AnalyzerQueueService } from "./analyzer-queue.service";
+import { DebateProcessingEventBus } from "../../ai/debate-processing-event-bus";
 
 @Processor(ANALYZER_QUEUE)
 export class AnalyzerProcessor extends WorkerHost {
@@ -18,6 +19,7 @@ export class AnalyzerProcessor extends WorkerHost {
   constructor(
     private readonly analyzeTurnService: AnalyzeTurnService,
     private readonly analyzerQueueService: AnalyzerQueueService,
+    private readonly processingEventBus: DebateProcessingEventBus,
   ) {
     super();
   }
@@ -40,6 +42,7 @@ export class AnalyzerProcessor extends WorkerHost {
     this.logger.log(
       `Analyzer round job started. jobId=${String(job.id)} debateId=${job.data.debateId} phase=${job.data.phase} round=${job.data.round} attempt=${attempt}/${maxAttempts}`,
     );
+    this.publishProcessing(job.data.debateId, job.data.phase, "STARTED", attempt);
 
     try {
       const result = await this.analyzeTurnService.analyzeTurn(
@@ -59,6 +62,7 @@ export class AnalyzerProcessor extends WorkerHost {
           `durationMs=${Date.now() - startedAt}`,
         ].join(" "),
       );
+      this.publishProcessing(job.data.debateId, job.data.phase, "COMPLETED", attempt);
       await this.analyzerQueueService.enqueueNextReadyRound(
         job.data.anchorTurnId,
       );
@@ -81,6 +85,7 @@ export class AnalyzerProcessor extends WorkerHost {
 
       const errorDetails = error instanceof Error ? error.stack : String(error);
       if (attempt < maxAttempts) {
+        this.publishProcessing(job.data.debateId, job.data.phase, "RETRYING", attempt);
         this.logger.warn(
           [
             "Analyzer job failed; automatic retry pending.",
@@ -95,6 +100,7 @@ export class AnalyzerProcessor extends WorkerHost {
           ].join(" "),
         );
       } else {
+        this.publishProcessing(job.data.debateId, job.data.phase, "FAILED", attempt);
         this.logger.error(
           [
             "Analyzer job permanently failed.",
@@ -110,6 +116,31 @@ export class AnalyzerProcessor extends WorkerHost {
       }
       throw error;
     }
+  }
+
+  private publishProcessing(
+    debateId: string,
+    phase: string,
+    status: "STARTED" | "RETRYING" | "COMPLETED" | "FAILED",
+    attempt: number,
+  ): void {
+    if (phase !== "CLOSING") return;
+    this.processingEventBus.publish({
+      type: "debate.processing.stage",
+      id: `analyzer:${debateId}`,
+      debateId,
+      stage: "ANALYZER",
+      status,
+      attempt,
+      message: status === "RETRYING"
+        ? "[분석 재시도 중] 발언 간 논리적 연결과 모순 재검사..."
+        : status === "COMPLETED"
+          ? "[분석 완료] 발언 구조 분석 완료"
+          : status === "FAILED"
+            ? "[분석 실패] 발언 구조 분석 실패"
+            : "[분석 중] 발언 간 논리적 연결과 모순 검사...",
+      occurredAt: new Date().toISOString(),
+    });
   }
 }
 

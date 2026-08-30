@@ -15,6 +15,7 @@ import { JudgeTaskService } from "./judge-task.service";
 import { JudgeProcessor } from "./queues/judge.processor";
 import { JUDGE_QUEUE } from "./queues/judge.constants";
 import { JudgeRecoveryScheduler } from "./judge-recovery.scheduler";
+import { JudgePipelineEventHandler } from "./judge-pipeline-event-handler";
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { JudgeRecoveryScheduler } from "./judge-recovery.scheduler";
     JudgeTaskService,
     JudgeProcessor,
     JudgeRecoveryScheduler,
+    JudgePipelineEventHandler,
   ],
   exports: [JudgeReadinessService, JudgeQueueService],
 })
