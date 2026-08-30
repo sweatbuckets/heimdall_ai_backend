@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, LessThan, Repository } from "typeorm";
 import { AnalyzeTurnInput, ExistingComponent } from "./dto/analyze-turn.dto";
 import { AnalyzeTurnInputError } from "./errors/analyzer.errors";
 import { DebateSide } from "../debates/domain/debate.enums";
@@ -21,24 +21,52 @@ export class AnalyzerInputAssembler {
   ) {}
 
   async assemble(turnId: string): Promise<AnalyzeTurnInput> {
-    const currentTurn = await this.debateTurnRepository.findOne({
+    const requestedTurn = await this.debateTurnRepository.findOne({
       where: { id: turnId },
       relations: { debate: true },
     });
 
-    if (!currentTurn) {
+    if (!requestedTurn) {
       throw new AnalyzeTurnInputError(`DebateTurn not found: ${turnId}.`);
     }
 
-    if (!currentTurn.content.trim()) {
-      throw new AnalyzeTurnInputError("DebateTurn content must not be empty.");
+    const currentTurns = await this.debateTurnRepository.find({
+      where: {
+        debateId: requestedTurn.debateId,
+        phase: requestedTurn.phase,
+        round: requestedTurn.round,
+      },
+      relations: { debate: true },
+      order: { sequence: "ASC" },
+    });
+
+    if (currentTurns.length !== 2) {
+      throw new AnalyzeTurnInputError(
+        `A debate round must contain exactly two turns: ${requestedTurn.phase}/${requestedTurn.round}.`,
+      );
     }
 
-    this.validateSpeakerSide(currentTurn);
+    if (new Set(currentTurns.map((turn) => turn.speakerSide)).size !== 2) {
+      throw new AnalyzeTurnInputError(
+        "A debate round must contain one turn from each side.",
+      );
+    }
+
+    for (const currentTurn of currentTurns) {
+      if (!currentTurn.content.trim()) {
+        throw new AnalyzeTurnInputError(
+          `DebateTurn content must not be empty: ${currentTurn.id}.`,
+        );
+      }
+      this.validateSpeakerSide(currentTurn);
+    }
+
+    const firstSequence = currentTurns[0].sequence;
 
     const accumulatedTurns = await this.debateTurnRepository.find({
       where: {
-        debateId: currentTurn.debateId,
+        debateId: requestedTurn.debateId,
+        sequence: LessThan(firstSequence),
       },
       relations: {
         components: true,
@@ -48,9 +76,9 @@ export class AnalyzerInputAssembler {
       },
     });
 
-    const existingComponents = accumulatedTurns
-      .filter((turn) => turn.id !== currentTurn.id)
-      .flatMap((turn) => this.mapTurnComponents(turn));
+    const existingComponents = accumulatedTurns.flatMap((turn) =>
+      this.mapTurnComponents(turn),
+    );
 
     const existingComponentIds = existingComponents.map(
       (component) => component.id,
@@ -63,20 +91,11 @@ export class AnalyzerInputAssembler {
 
     return {
       debate: {
-        id: currentTurn.debate.id,
-        topic: currentTurn.debate.topic,
-        sideASpeakerId: currentTurn.debate.sideASpeakerId,
-        sideBSpeakerId: currentTurn.debate.sideBSpeakerId,
-        rebuttalQuestionRounds: currentTurn.debate.rebuttalQuestionRounds,
-      },
-      currentTurn: {
-        id: currentTurn.id,
-        speakerId: currentTurn.speakerId,
-        speakerSide: currentTurn.speakerSide,
-        phase: currentTurn.phase,
-        round: currentTurn.round,
-        sequence: currentTurn.sequence,
-        content: currentTurn.content,
+        id: requestedTurn.debate.id,
+        topic: requestedTurn.debate.topic,
+        sideASpeakerId: requestedTurn.debate.sideASpeakerId,
+        sideBSpeakerId: requestedTurn.debate.sideBSpeakerId,
+        rebuttalQuestionRounds: requestedTurn.debate.rebuttalQuestionRounds,
       },
       accumulatedGraph: {
         components: existingComponents,
@@ -91,6 +110,15 @@ export class AnalyzerInputAssembler {
           type: relation.type,
         })),
       },
+      currentTurns: currentTurns.map((currentTurn) => ({
+        id: currentTurn.id,
+        speakerId: currentTurn.speakerId,
+        speakerSide: currentTurn.speakerSide,
+        phase: currentTurn.phase,
+        round: currentTurn.round,
+        sequence: currentTurn.sequence,
+        content: currentTurn.content,
+      })),
     };
   }
 

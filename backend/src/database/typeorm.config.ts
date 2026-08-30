@@ -4,11 +4,14 @@ import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { ArgumentalRelationEntity } from "../debates/entities/argumental-relation.entity";
 import { InteractionalRelationEntity } from "../debates/entities/interactional-relation.entity";
-import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
 import { FactCheckBatchTargetEntity } from "../debates/entities/fact-check-batch-target.entity";
 import { FactCheckResultEntity } from "../debates/entities/fact-check-result.entity";
 import { FactCheckSourceEntity } from "../debates/entities/fact-check-source.entity";
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
+import { FactCheckBatchEntity } from "../debates/entities/fact-check-batch.entity";
+import { FactCheckStageTaskEntity } from "../debates/entities/fact-check-stage-task.entity";
+import { FactCheckGroundingSnapshotEntity } from "../debates/entities/fact-check-grounding-snapshot.entity";
+import { JudgeTaskEntity } from "../debates/entities/judge-task.entity";
 import { MemberEntity } from "../members/entities/member.entity";
 import { DebateTurnVoteEntity } from "../debates/entities/debate-turn-vote.entity";
 import { RefreshTokenSessionEntity } from "../auth/entities/refresh-token-session.entity";
@@ -30,11 +33,14 @@ export const debateEntities = [
   ArgumentComponentEntity,
   ArgumentalRelationEntity,
   InteractionalRelationEntity,
-  FactCheckBatchTaskEntity,
   FactCheckBatchTargetEntity,
   FactCheckResultEntity,
   FactCheckSourceEntity,
+  FactCheckBatchEntity,
+  FactCheckStageTaskEntity,
+  FactCheckGroundingSnapshotEntity,
   JudgmentResultEntity,
+  JudgeTaskEntity,
 ] as const;
 
 export function createTypeOrmOptions(): TypeOrmModuleOptions {

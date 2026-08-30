@@ -80,7 +80,7 @@ export enum VerificationStatus {
   PARTIALLY_SUPPORTED = 'PARTIALLY_SUPPORTED',
   INSUFFICIENT_EVIDENCE = 'INSUFFICIENT_EVIDENCE',
   NOT_VERIFIABLE = 'NOT_VERIFIABLE',
-  OUTDATED_OR_TIME_SENSITIVE = 'OUTDATED_OR_TIME_SENSITIVE',
+  OUTDATED = 'OUTDATED',
 }
 
 export enum JudgmentWinner {
@@ -96,10 +96,10 @@ export enum JudgmentWinner {
 |---|---|
 | `SUPPORTED` | 신뢰 가능한 출처가 주장 전체를 뒷받침함 |
 | `CONTRADICTED` | 신뢰 가능한 출처가 주장과 명확히 충돌함 |
-| `PARTIALLY_SUPPORTED` | 일부만 맞거나 조건, 범위, 예외가 누락됨 |
+| `PARTIALLY_SUPPORTED` | 근거가 충분하며 핵심 부분 중 일부는 지지되고 다른 일부는 반박됨 |
 | `INSUFFICIENT_EVIDENCE` | 검증 가능한 주장이지만 충분한 근거를 찾지 못함 |
 | `NOT_VERIFIABLE` | 가치 판단, 예측, 주관 표현 등 사실 검증 대상으로 부적절함 |
-| `OUTDATED_OR_TIME_SENSITIVE` | 시점에 따라 달라져 현재 기준으로 단정하기 어려움 |
+| `OUTDATED` | 과거에는 유효했지만 토론 기준 시점에는 더 이상 유효하지 않음 |
 
 `NOT_VERIFIABLE`은 원칙적으로 Analyzer가 걸러야 하지만, 잘못 전달된 입력에 대한 FactChecker의 안전장치로 유지한다.
 
@@ -546,7 +546,7 @@ export enum VerificationStatus {
   PARTIALLY_SUPPORTED = 'PARTIALLY_SUPPORTED',
   INSUFFICIENT_EVIDENCE = 'INSUFFICIENT_EVIDENCE',
   NOT_VERIFIABLE = 'NOT_VERIFIABLE',
-  OUTDATED_OR_TIME_SENSITIVE = 'OUTDATED_OR_TIME_SENSITIVE',
+  OUTDATED = 'OUTDATED',
 }
 
 export enum JudgmentWinner {

@@ -114,7 +114,7 @@ describe("DebateChatService", () => {
       "debate-chat:draft-dedup:debate-1:speaker-a:SIDE_A:OPENING:1",
     );
     expect(evalCall[8]).toBe("5");
-    expect(evalCall[9]).toBe("1000");
+    expect(evalCall[9]).toBe("500");
     expect(evalCall[11]).toBe("client-message-1");
   });
 
@@ -166,6 +166,20 @@ describe("DebateChatService", () => {
     await expect(
       service.appendDraftMessage("debate-1", command),
     ).rejects.toThrow(DebateChatStateError);
+  });
+
+  it("rejects messages during the preparation period", async () => {
+    const preparingDebate: Partial<DebateEntity> = {
+      ...debate,
+      currentTurnStartedAt: new Date(Date.now() + 10_000),
+    };
+    const redis = new MockRedis([1, 5]);
+    const service = createService(preparingDebate, redis);
+
+    await expect(
+      service.appendDraftMessage("debate-1", command),
+    ).rejects.toThrow("The debate is still in its preparation period.");
+    expect(redis.evalCalls).toHaveLength(0);
   });
 
   it("releases finalize locks only through owner-token Lua compare-and-delete", async () => {

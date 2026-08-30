@@ -1,4 +1,8 @@
-import { VerificationStatus } from "../../debates/domain/debate.enums";
+import {
+  DebatePhase,
+  DebateSide,
+  VerificationStatus,
+} from "../../debates/domain/debate.enums";
 import {
   FactCheckBatchInput,
   FactCheckBatchOutput,
@@ -13,18 +17,24 @@ describe("validateFactCheckBatchOutput", () => {
       id: "debate-1",
       topic: "Should attendance count toward grades?",
     },
-    turn: {
-      id: "turn-1",
-      sequence: 1,
+    round: {
+      phase: DebatePhase.OPENING,
+      number: 1,
     },
     targets: [
       {
         componentId: "component-1",
         statement: "Attendance improves final grades.",
+        turnId: "turn-1",
+        sequence: 1,
+        speakerSide: DebateSide.SIDE_A,
       },
       {
         componentId: "component-2",
         statement: "Attendance policies reduce dropout rates.",
+        turnId: "turn-2",
+        sequence: 2,
+        speakerSide: DebateSide.SIDE_B,
       },
     ],
   };

@@ -10,12 +10,12 @@ import {
 } from "typeorm";
 import { VerificationStatus } from "../domain/debate.enums";
 import { ArgumentComponentEntity } from "./argument-component.entity";
-import { FactCheckBatchTaskEntity } from "./fact-check-batch-task.entity";
+import { FactCheckBatchEntity } from "./fact-check-batch.entity";
 import { FactCheckSourceEntity } from "./fact-check-source.entity";
 
 @Entity("fact_check_result")
-@Unique("uq_fact_check_result_task_component", [
-  "factCheckBatchTaskId",
+@Unique("uq_fact_check_result_batch_component", [
+  "factCheckBatchId",
   "componentId",
 ])
 @Index("idx_fact_check_result_component_id", ["componentId"])
@@ -23,8 +23,8 @@ export class FactCheckResultEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column({ name: "fact_check_batch_task_id", type: "uuid" })
-  factCheckBatchTaskId: string;
+  @Column({ name: "fact_check_batch_id", type: "uuid" })
+  factCheckBatchId: string;
 
   @Column({ name: "component_id", type: "uuid" })
   componentId: string;
@@ -42,11 +42,11 @@ export class FactCheckResultEntity {
   @Column({ name: "checked_at", type: "timestamptz" })
   checkedAt: Date;
 
-  @ManyToOne(() => FactCheckBatchTaskEntity, (task) => task.results, {
+  @ManyToOne(() => FactCheckBatchEntity, (batch) => batch.results, {
     onDelete: "CASCADE",
   })
-  @JoinColumn({ name: "fact_check_batch_task_id" })
-  factCheckBatchTask: FactCheckBatchTaskEntity;
+  @JoinColumn({ name: "fact_check_batch_id" })
+  factCheckBatch: FactCheckBatchEntity;
 
   @ManyToOne(
     () => ArgumentComponentEntity,

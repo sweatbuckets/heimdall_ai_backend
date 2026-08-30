@@ -1,85 +1,105 @@
+import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { DataSource } from "typeorm";
+import { DataSource, EntityManager } from "typeorm";
 import {
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
+  JudgeTaskStatus,
 } from "../debates/domain/debate.enums";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { DebateEntity } from "../debates/entities/debate.entity";
 import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
-import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
+import { FactCheckBatchEntity } from "../debates/entities/fact-check-batch.entity";
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
-import { JudgeService } from "./judge.service";
-import { DEFAULT_JUDGE_PROCESSING_STALE_MS } from "./constants";
-import { AiInvocationCancelledError } from "../ai/ai-invocation-cancellation.service";
+import { JudgeTaskEntity } from "../debates/entities/judge-task.entity";
+import { DEFAULT_JUDGE_MANUAL_RETRY_STALE_MS } from "./constants";
+import { JudgeConflictError } from "./errors/judge.errors";
+import { JudgeQueueService } from "./judge-queue.service";
 
 @Injectable()
 export class JudgeReadinessService {
   constructor(
     private readonly dataSource: DataSource,
-    private readonly judgeService: JudgeService,
+    private readonly queueService: JudgeQueueService,
     private readonly configService: ConfigService,
   ) {}
 
   async tryStartJudge(debateId: string): Promise<void> {
-    const debate = await this.dataSource
-      .getRepository(DebateEntity)
-      .findOne({ where: { id: debateId } });
+    const taskId = await this.dataSource.transaction(async (manager) => {
+      const debate = await manager.findOne(DebateEntity, {
+        where: { id: debateId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!debate || debate.status !== DebateStatus.DEBATE_FINALIZED) {
+        return null;
+      }
 
-    if (!debate || debate.status !== DebateStatus.DEBATE_FINALIZED) {
-      return;
+      const existingTask = await manager.findOne(JudgeTaskEntity, {
+        where: { debateId },
+      });
+      if (existingTask) {
+        return existingTask.status === JudgeTaskStatus.PENDING
+          ? existingTask.id
+          : null;
+      }
+
+      // All reads use the same transaction-bound QueryRunner. Keep them
+      // sequential so pg is never asked to execute overlapping queries on
+      // the same client connection.
+      const turnCount = await manager.count(DebateTurnEntity, {
+        where: { debateId },
+      });
+      const incompleteTurns = await this.countIncompleteTurns(
+        manager,
+        debateId,
+      );
+      const incompleteBatches = await this.countIncompleteFactCheckBatches(
+        manager,
+        debateId,
+      );
+      const missingResults = await this.countMissingFactCheckResults(
+        manager,
+        debateId,
+      );
+      const judgments = await manager.count(JudgmentResultEntity, {
+        where: { debateId },
+      });
+      const expectedTurnCount = 4 + debate.rebuttalQuestionRounds * 2;
+      if (
+        turnCount !== expectedTurnCount ||
+        incompleteTurns > 0 ||
+        incompleteBatches > 0 ||
+        missingResults > 0 ||
+        judgments > 0
+      ) {
+        return null;
+      }
+
+      const taskId = randomUUID();
+      await manager.insert(JudgeTaskEntity, {
+        id: taskId,
+        debateId,
+        status: JudgeTaskStatus.PENDING,
+        attemptCount: 0,
+      });
+      const updated = await manager.update(
+        DebateEntity,
+        { id: debateId, status: DebateStatus.DEBATE_FINALIZED },
+        { status: DebateStatus.JUDGING, judgingStartedAt: new Date() },
+      );
+      if (updated.affected !== 1) {
+        throw new JudgeConflictError(
+          `Debate Judge readiness state changed: ${debateId}.`,
+        );
+      }
+      return taskId;
+    });
+
+    if (taskId) {
+      await this.queueService.enqueueTask(taskId);
     }
-
-    const [
-      turnCount,
-      incompleteTurnCount,
-      incompleteFactCheckTaskCount,
-      missingFactCheckResultCount,
-      judgmentResultCount,
-    ] = await Promise.all([
-      this.dataSource
-        .getRepository(DebateTurnEntity)
-        .count({ where: { debateId } }),
-      this.countIncompleteTurns(debateId),
-      this.countIncompleteFactCheckTasks(debateId),
-      this.countMissingFactCheckResults(debateId),
-      this.dataSource
-        .getRepository(JudgmentResultEntity)
-        .count({ where: { debateId } }),
-    ]);
-
-    const expectedTurnCount = 4 + debate.rebuttalQuestionRounds * 2;
-
-    if (
-      turnCount !== expectedTurnCount ||
-      incompleteTurnCount > 0 ||
-      incompleteFactCheckTaskCount > 0 ||
-      missingFactCheckResultCount > 0 ||
-      judgmentResultCount > 0
-    ) {
-      return;
-    }
-
-    const claimResult = await this.dataSource
-      .createQueryBuilder()
-      .update(DebateEntity)
-      .set({
-        status: DebateStatus.JUDGING,
-        judgingStartedAt: new Date(),
-      })
-      .where("id = :debateId", { debateId })
-      .andWhere("status = :status", {
-        status: DebateStatus.DEBATE_FINALIZED,
-      })
-      .execute();
-
-    if (claimResult.affected !== 1) {
-      return;
-    }
-
-    await this.executeClaimedJudge(debateId);
   }
 
   async retryStaleJudge(debateId: string): Promise<void> {
@@ -87,38 +107,23 @@ export class JudgeReadinessService {
       (await this.dataSource
         .getRepository(JudgmentResultEntity)
         .count({ where: { debateId } })) > 0;
-
-    if (hasJudgmentResult) {
-      return;
-    }
+    if (hasJudgmentResult) return;
 
     const staleMs = this.configService.get<number>(
-      "JUDGE_PROCESSING_STALE_MS",
-      DEFAULT_JUDGE_PROCESSING_STALE_MS,
+      "JUDGE_MANUAL_RETRY_STALE_MS",
+      DEFAULT_JUDGE_MANUAL_RETRY_STALE_MS,
     );
-    const staleBefore = new Date(Date.now() - staleMs);
-
-    const claimResult = await this.dataSource
-      .createQueryBuilder()
-      .update(DebateEntity)
-      .set({ judgingStartedAt: new Date() })
-      .where("id = :debateId", { debateId })
-      .andWhere("status = :status", { status: DebateStatus.JUDGING })
-      .andWhere(
-        "(judging_started_at IS NULL OR judging_started_at < :staleBefore)",
-        { staleBefore },
-      )
-      .execute();
-
-    if (claimResult.affected !== 1) {
-      return;
-    }
-
-    await this.executeClaimedJudge(debateId);
+    await this.queueService.retryTaskForDebate(
+      debateId,
+      new Date(Date.now() - staleMs),
+    );
   }
 
-  private countIncompleteTurns(debateId: string): Promise<number> {
-    return this.dataSource
+  private countIncompleteTurns(
+    manager: EntityManager,
+    debateId: string,
+  ): Promise<number> {
+    return manager
       .getRepository(DebateTurnEntity)
       .createQueryBuilder("turn")
       .where("turn.debate_id = :debateId", { debateId })
@@ -128,20 +133,25 @@ export class JudgeReadinessService {
       .getCount();
   }
 
-  private countIncompleteFactCheckTasks(debateId: string): Promise<number> {
-    return this.dataSource
-      .getRepository(FactCheckBatchTaskEntity)
-      .createQueryBuilder("task")
-      .innerJoin("task.turn", "turn")
-      .where("turn.debate_id = :debateId", { debateId })
-      .andWhere("task.status <> :status", {
-        status: FactCheckBatchTaskStatus.COMPLETED,
+  private countIncompleteFactCheckBatches(
+    manager: EntityManager,
+    debateId: string,
+  ): Promise<number> {
+    return manager
+      .getRepository(FactCheckBatchEntity)
+      .createQueryBuilder("batch")
+      .where("batch.debate_id = :debateId", { debateId })
+      .andWhere("batch.status <> :status", {
+        status: FactCheckBatchStatus.COMPLETED,
       })
       .getCount();
   }
 
-  private countMissingFactCheckResults(debateId: string): Promise<number> {
-    return this.dataSource
+  private countMissingFactCheckResults(
+    manager: EntityManager,
+    debateId: string,
+  ): Promise<number> {
+    return manager
       .getRepository(ArgumentComponentEntity)
       .createQueryBuilder("component")
       .innerJoin("component.turn", "turn")
@@ -152,14 +162,5 @@ export class JudgeReadinessService {
       })
       .andWhere("factCheckResult.id IS NULL")
       .getCount();
-  }
-
-  private async executeClaimedJudge(debateId: string): Promise<void> {
-    try {
-      await this.judgeService.judgeDebate(debateId);
-    } catch (error) {
-      if (error instanceof AiInvocationCancelledError) return;
-      throw error;
-    }
   }
 }

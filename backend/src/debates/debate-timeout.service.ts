@@ -8,28 +8,47 @@ import {
 } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { Queue } from "bullmq";
-import { DataSource, In, LessThanOrEqual } from "typeorm";
+import { DataSource, In } from "typeorm";
 import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
 import { AnalyzerQueueService } from "../analyzer/queues/analyzer-queue.service";
 import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
 import { CommunityEntity } from "../community-chat/entities/community.entity";
 import { DebateChatService } from "../debate-chat/debate-chat.service";
 import { DebateChatWebSocketServer } from "../debate-chat/debate-chat.websocket-server";
-import { FACT_CHECK_QUEUE } from "../fact-check/queues/fact-check.constants";
+import {
+  FACT_CHECK_GROUNDING_QUEUE,
+  FACT_CHECK_SYNTHESIS_QUEUE,
+} from "../fact-check/queues/fact-check.constants";
 import {
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
+  FactCheckStage,
+  FactCheckStageTaskStatus,
+  JudgeTaskStatus,
 } from "./domain/debate.enums";
 import { DebateEntity } from "./entities/debate.entity";
 import { DebateTurnEntity } from "./entities/debate-turn.entity";
-import { FactCheckBatchTaskEntity } from "./entities/fact-check-batch-task.entity";
-import { DEBATE_TOTAL_DURATION_MS } from "./debate-timeout.constants";
+import { FactCheckBatchEntity } from "./entities/fact-check-batch.entity";
+import { FactCheckStageTaskEntity } from "./entities/fact-check-stage-task.entity";
+import { JudgeTaskEntity } from "./entities/judge-task.entity";
+import { JudgeQueueService } from "../judge/judge-queue.service";
+import {
+  DEBATE_DURATION_PER_ROUND_MS,
+  DEBATE_FIXED_DURATION_MS,
+  isDebateLiveExpired,
+} from "./debate-timeout.constants";
 import { MemberEntity } from "../members/entities/member.entity";
 import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
+import { CommunityNotificationService } from "../community-chat/community-notification.service";
 
-const TIMEOUT_POLL_INTERVAL_MS = 2_000;
+const TIMEOUT_POLL_INTERVAL_MS = 30_000;
 const TIMEOUT_BATCH_SIZE = 20;
+const TIMEOUT_ELIGIBLE_STATUSES = [
+  DebateStatus.IN_PROGRESS,
+  DebateStatus.DEBATE_FINALIZED,
+  DebateStatus.JUDGING,
+];
 
 interface TerminateDebateOptions {
   allowedStatuses: DebateStatus[];
@@ -50,8 +69,12 @@ export class DebateTimeoutService {
     private readonly cancellationService: AiInvocationCancellationService,
     private readonly debateChatService: DebateChatService,
     private readonly websocketServer: DebateChatWebSocketServer,
-    @InjectQueue(FACT_CHECK_QUEUE)
-    private readonly factCheckQueue: Queue,
+    private readonly communityNotificationService: CommunityNotificationService,
+    @InjectQueue(FACT_CHECK_GROUNDING_QUEUE)
+    private readonly factCheckGroundingQueue: Queue,
+    @InjectQueue(FACT_CHECK_SYNTHESIS_QUEUE)
+    private readonly factCheckSynthesisQueue: Queue,
+    private readonly judgeQueueService: JudgeQueueService,
   ) {}
 
   @Interval(TIMEOUT_POLL_INTERVAL_MS)
@@ -59,21 +82,27 @@ export class DebateTimeoutService {
     if (this.polling) return;
     this.polling = true;
     try {
-      const deadline = new Date(Date.now() - DEBATE_TOTAL_DURATION_MS);
       const candidates = await this.dataSource
         .getRepository(DebateEntity)
-        .find({
-          where: {
-            status: In([
-              DebateStatus.IN_PROGRESS,
-              DebateStatus.DEBATE_FINALIZED,
-              DebateStatus.JUDGING,
-            ]),
-            startedAt: LessThanOrEqual(deadline),
+        .createQueryBuilder("debate")
+        .where("debate.status IN (:...statuses)", {
+          statuses: TIMEOUT_ELIGIBLE_STATUSES,
+        })
+        .andWhere("debate.started_at IS NOT NULL")
+        .andWhere(
+          `debate.started_at +
+            (:fixedDurationMs +
+              debate.rebuttal_question_rounds * :durationPerRoundMs) *
+              INTERVAL '1 millisecond' <= :now`,
+          {
+            fixedDurationMs: DEBATE_FIXED_DURATION_MS,
+            durationPerRoundMs: DEBATE_DURATION_PER_ROUND_MS,
+            now: new Date(),
           },
-          order: { startedAt: "ASC" },
-          take: TIMEOUT_BATCH_SIZE,
-        });
+        )
+        .orderBy("debate.started_at", "ASC")
+        .take(TIMEOUT_BATCH_SIZE)
+        .getMany();
 
       for (const candidate of candidates) {
         try {
@@ -92,11 +121,7 @@ export class DebateTimeoutService {
 
   async expireDebate(debateId: string): Promise<boolean> {
     return this.terminateDebate(debateId, {
-      allowedStatuses: [
-        DebateStatus.IN_PROGRESS,
-        DebateStatus.DEBATE_FINALIZED,
-        DebateStatus.JUDGING,
-      ],
+      allowedStatuses: TIMEOUT_ELIGIBLE_STATUSES,
       eventReason: "TOTAL_TIME_EXPIRED",
       taskFailureReason: "Debate total time limit expired.",
       requireExpired: true,
@@ -145,9 +170,7 @@ export class DebateTimeoutService {
 
       if (
         !options.allowedStatuses.includes(debate.status) ||
-        (options.requireExpired &&
-          (!debate.startedAt ||
-            Date.now() < debate.startedAt.getTime() + DEBATE_TOTAL_DURATION_MS))
+        (options.requireExpired && !isDebateLiveExpired(debate))
       ) {
         return null;
       }
@@ -157,13 +180,22 @@ export class DebateTimeoutService {
         select: { id: true },
       });
       const turnIds = turns.map((turn) => turn.id);
+      const batches = await manager.find(FactCheckBatchEntity, {
+        where: { debateId },
+        select: { id: true },
+      });
+      const batchIds = batches.map((batch) => batch.id);
       const tasks =
-        turnIds.length === 0
+        batchIds.length === 0
           ? []
-          : await manager.find(FactCheckBatchTaskEntity, {
-              where: { turnId: In(turnIds) },
-              select: { id: true },
+          : await manager.find(FactCheckStageTaskEntity, {
+              where: { factCheckBatchId: In(batchIds) },
+              select: { id: true, stage: true },
             });
+      const judgeTasks = await manager.find(JudgeTaskEntity, {
+        where: { debateId },
+        select: { id: true },
+      });
       const endedAt = new Date();
 
       await manager.update(
@@ -195,28 +227,64 @@ export class DebateTimeoutService {
           analysisProcessingStartedAt: null,
         },
       );
-      if (turnIds.length > 0) {
+      if (batchIds.length > 0) {
         await manager.update(
-          FactCheckBatchTaskEntity,
+          FactCheckStageTaskEntity,
           {
-            turnId: In(turnIds),
+            factCheckBatchId: In(batchIds),
             status: In([
-              FactCheckBatchTaskStatus.PENDING,
-              FactCheckBatchTaskStatus.PROCESSING,
+              FactCheckStageTaskStatus.PENDING,
+              FactCheckStageTaskStatus.PROCESSING,
             ]),
           },
           {
-            status: FactCheckBatchTaskStatus.FAILED,
+            status: FactCheckStageTaskStatus.FAILED,
+            processingStartedAt: null,
+            failureReason: options.taskFailureReason,
+          },
+        );
+        await manager.update(
+          FactCheckBatchEntity,
+          {
+            id: In(batchIds),
+            status: In([
+              FactCheckBatchStatus.PENDING,
+              FactCheckBatchStatus.PROCESSING,
+            ]),
+          },
+          {
+            status: FactCheckBatchStatus.FAILED,
             failureReason: options.taskFailureReason,
           },
         );
       }
+      await manager.update(
+        JudgeTaskEntity,
+        {
+          debateId,
+          status: In([JudgeTaskStatus.PENDING, JudgeTaskStatus.PROCESSING]),
+        },
+        {
+          status: JudgeTaskStatus.FAILED,
+          processingStartedAt: null,
+          failureReason: options.taskFailureReason,
+        },
+      );
       await manager.update(
         CommunityEntity,
         { id: debate.communityId },
         { status: CommunityStatus.WAITING },
       );
       if (options.forfeitingMemberId) {
+        const forfeitingMember = await manager.findOne(MemberEntity, {
+          where: { id: options.forfeitingMemberId },
+          select: { displayName: true },
+        });
+        if (!forfeitingMember) {
+          throw new Error(
+            `Forfeiting member not found: ${options.forfeitingMemberId}.`,
+          );
+        }
         const winnerMemberId =
           debate.sideASpeakerId === options.forfeitingMemberId
             ? debate.sideBSpeakerId
@@ -232,12 +300,34 @@ export class DebateTimeoutService {
             `Forfeit winner score update failed: ${winnerMemberId}.`,
           );
         }
+        const notification =
+          await this.communityNotificationService.createDebateForfeit(
+            manager,
+            debate.communityId,
+            debateId,
+            forfeitingMember.displayName,
+          );
+        return {
+          communityId: debate.communityId,
+          turnIds,
+          tasks,
+          judgeTaskIds: judgeTasks.map((task) => task.id),
+          notification,
+        };
       }
 
+      const notification =
+        await this.communityNotificationService.createDebateTimeout(
+          manager,
+          debate.communityId,
+          debateId,
+        );
       return {
         communityId: debate.communityId,
         turnIds,
-        taskIds: tasks.map((task) => task.id),
+        tasks,
+        judgeTaskIds: judgeTasks.map((task) => task.id),
+        notification,
       };
     });
 
@@ -248,7 +338,10 @@ export class DebateTimeoutService {
       ...claimed.turnIds.map((turnId) =>
         this.analyzerQueueService.cancelAnalyzeTurn(turnId),
       ),
-      ...claimed.taskIds.map((taskId) => this.removeFactCheckJob(taskId)),
+      ...claimed.tasks.map((task) => this.removeFactCheckJob(task)),
+      ...claimed.judgeTaskIds.map((taskId) =>
+        this.judgeQueueService.removeTaskJob(taskId),
+      ),
       this.debateChatService.clearDebateDrafts(debateId),
     ]);
     this.websocketServer.publishDebateEnded(
@@ -257,11 +350,21 @@ export class DebateTimeoutService {
       DebateStatus.FAILED,
       options.eventReason,
     );
+    if (claimed.notification) {
+      this.communityNotificationService.publish(claimed.notification);
+    }
     return true;
   }
 
-  private async removeFactCheckJob(taskId: string): Promise<void> {
-    const job = await this.factCheckQueue.getJob(taskId);
+  private async removeFactCheckJob(task: {
+    id: string;
+    stage: FactCheckStage;
+  }): Promise<void> {
+    const queue =
+      task.stage === FactCheckStage.GROUNDING
+        ? this.factCheckGroundingQueue
+        : this.factCheckSynthesisQueue;
+    const job = await queue.getJob(task.id);
     if (!job) return;
     const state = await job.getState();
     if (state !== "active" && state !== "completed") {

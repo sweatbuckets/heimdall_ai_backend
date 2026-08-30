@@ -92,7 +92,8 @@ Grounding 기반 출처 탐색과 사실 판정 결과 생성을 분리하고, �
 - Grounding 단계는 판정 JSON을 만들지 않고, 근거 텍스트와 Gemini `groundingMetadata` 기반 출처 후보 수집에 집중합니다.
 - 서버가 출처 URL 검증, 중복 제거, `sourceIndex` 부여를 끝낸 뒤에만 Synthesis 프롬프트에 허용 출처 목록을 전달합니다.
 - Synthesis 프롬프트는 모든 input target에 정확히 하나의 result를 반환하고, URL 직접 생성 없이 허용된 `sourceIndex`만 참조하도록 제한합니다.
-- 근거가 부족하거나 검증 불가능하거나 최신성이 중요한 주장은 무리하게 확정하지 않고 검증 불가 계열 status로 분류하도록 지시합니다.
+- `PARTIALLY_SUPPORTED`는 지지되는 핵심 부분과 반박되는 핵심 부분이 모두 확인될 때만 사용하며, 단순한 근거 부족은 `INSUFFICIENT_EVIDENCE`로 분류합니다.
+- 과거에는 유효했지만 토론 기준 시점에는 더 이상 유효하지 않은 주장은 `OUTDATED`로 분류합니다.
 
 **Backend 검증 규칙**
 
@@ -101,7 +102,7 @@ Grounding 기반 출처 탐색과 사실 판정 결과 생성을 분리하고, �
 - `VerificationStatus`, reason 공백/길이, result별 source 개수 제한을 검증합니다.
 - `sourceIndex`가 Gemini `groundingMetadata`에서 추출한 허용 출처 목록에 존재하는지 검증합니다.
 - 같은 result 안의 중복 source를 제거하고, Result/Source 저장과 BatchTask `COMPLETED` 전환을 하나의 transaction으로 처리합니다.
-- 검증 불가(`NOT_VERIFIABLE`, `INSUFFICIENT_EVIDENCE`, `OUTDATED_OR_TIME_SENSITIVE`)는 시스템 실패가 아닌 정상 도메인 결과로 저장합니다.
+- 검증 불가(`NOT_VERIFIABLE`, `INSUFFICIENT_EVIDENCE`, `OUTDATED`)는 시스템 실패가 아닌 정상 도메인 결과로 저장합니다.
 - 복구 Scheduler는 `PENDING` Task를 재등록하고 오래된 `PROCESSING` Task를 회수합니다.
 
 <p align="center">

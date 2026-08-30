@@ -13,6 +13,7 @@ import {
 } from "./domain/community-chat.enums";
 import {
   CommunityDto,
+  CommunityParticipantPreviewDto,
   CommunityMemberDto,
   CommunityMessageDto,
   CommunityOpinionDto,
@@ -24,10 +25,14 @@ import { CommunityEntity } from "./entities/community.entity";
 import { CommunityMemberEntity } from "./entities/community-member.entity";
 import { CommunityMessageEntity } from "./entities/community-message.entity";
 import { CommunityOpinionEntity } from "./entities/community-opinion.entity";
+import { CommunityNotificationService } from "./community-notification.service";
 
 @Injectable()
 export class CommunityChatService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly notificationService: CommunityNotificationService,
+  ) {}
 
   async createCommunity(
     memberId: string,
@@ -69,6 +74,9 @@ export class CommunityChatService {
     const counts = await this.loadMemberCounts(
       communities.map((item) => item.id),
     );
+    const participantPreviews = await this.loadParticipantPreviews(
+      communities.map((item) => item.id),
+    );
     const joinedIds = await this.loadJoinedCommunityIds(
       communities.map((item) => item.id),
       memberId,
@@ -77,6 +85,7 @@ export class CommunityChatService {
       mapCommunity(
         community,
         counts.get(community.id) ?? 0,
+        participantPreviews.get(community.id) ?? [],
         memberId,
         joinedIds.has(community.id),
       ),
@@ -94,7 +103,14 @@ export class CommunityChatService {
     const isJoined = await this.dataSource
       .getRepository(CommunityMemberEntity)
       .exist({ where: { communityId, memberId } });
-    return mapCommunity(community, count, memberId, isJoined);
+    const participantPreviews = await this.loadParticipantPreviews([communityId]);
+    return mapCommunity(
+      community,
+      count,
+      participantPreviews.get(communityId) ?? [],
+      memberId,
+      isJoined,
+    );
   }
 
   async joinCommunity(communityId: string, memberId: string): Promise<void> {
@@ -151,14 +167,7 @@ export class CommunityChatService {
       .setParameter("openIntent", CommunityDebateIntent.OPEN_TO_DEBATE)
       .getMany();
 
-    return memberships.map((membership) => ({
-      id: membership.member.id,
-      displayName: membership.member.displayName,
-      profileImageUrl: membership.member.profileImageUrl,
-      role: membership.role,
-      debateIntent: membership.debateIntent,
-      joinedAt: membership.joinedAt.toISOString(),
-    }));
+    return memberships.map(mapCommunityMember);
   }
 
   async updateCommunityDebateIntent(
@@ -174,6 +183,22 @@ export class CommunityChatService {
         `Community member not found: ${communityId}/${memberId}.`,
       );
     }
+
+    const membership = await this.dataSource
+      .getRepository(CommunityMemberEntity)
+      .findOne({
+        where: { communityId, memberId },
+        relations: { member: true },
+      });
+    if (!membership) {
+      throw new NotFoundException(
+        `Community member not found after update: ${communityId}/${memberId}.`,
+      );
+    }
+    this.notificationService.publishDebateIntent({
+      communityId,
+      member: mapCommunityMember(membership),
+    });
   }
 
   async listMessages(
@@ -258,6 +283,13 @@ export class CommunityChatService {
   ): Promise<CommunityOpinionDto> {
     await this.joinCommunity(communityId, memberId);
     const repository = this.dataSource.getRepository(CommunityOpinionEntity);
+    const existing = await repository.findOne({
+      where: { communityId, authorId: memberId },
+      select: { id: true },
+    });
+    const action: CommunityOpinionDto["action"] = existing
+      ? "UPDATED"
+      : "CREATED";
     await repository.upsert(
       {
         communityId,
@@ -275,7 +307,7 @@ export class CommunityChatService {
     if (!opinion) {
       throw new Error("Community opinion was not stored.");
     }
-    return mapOpinion(opinion);
+    return { ...mapOpinion(opinion), action };
   }
 
   async assertCommunityExists(communityId: string): Promise<void> {
@@ -325,11 +357,38 @@ export class CommunityChatService {
       });
     return new Set(memberships.map((membership) => membership.communityId));
   }
+
+  private async loadParticipantPreviews(
+    communityIds: string[],
+  ): Promise<Map<string, CommunityParticipantPreviewDto[]>> {
+    if (communityIds.length === 0) return new Map();
+    const memberships = await this.dataSource
+      .getRepository(CommunityMemberEntity)
+      .find({
+        where: { communityId: In(communityIds) },
+        relations: { member: true },
+        order: { joinedAt: "ASC" },
+      });
+    const previews = new Map<string, CommunityParticipantPreviewDto[]>();
+    for (const membership of memberships) {
+      const list = previews.get(membership.communityId) ?? [];
+      if (list.length < 3) {
+        list.push({
+          id: membership.member.id,
+          displayName: membership.member.displayName,
+          profileImageUrl: membership.member.profileImageUrl,
+        });
+        previews.set(membership.communityId, list);
+      }
+    }
+    return previews;
+  }
 }
 
 function mapCommunity(
   community: CommunityEntity,
   memberCount: number,
+  participantPreviews: CommunityParticipantPreviewDto[],
   currentMemberId: string,
   isJoined: boolean,
 ): CommunityDto {
@@ -344,10 +403,24 @@ function mapCommunity(
     hostClaim: community.hostClaim,
     hostReasons: community.hostReasons,
     host: { id: community.host.id, displayName: community.host.displayName },
+    participantPreviews,
     memberCount,
     createdAt: community.createdAt.toISOString(),
     isOwnedByCurrentUser: community.hostId === currentMemberId,
     isJoined,
+  };
+}
+
+function mapCommunityMember(
+  membership: CommunityMemberEntity,
+): CommunityMemberDto {
+  return {
+    id: membership.member.id,
+    displayName: membership.member.displayName,
+    profileImageUrl: membership.member.profileImageUrl,
+    role: membership.role,
+    debateIntent: membership.debateIntent,
+    joinedAt: membership.joinedAt.toISOString(),
   };
 }
 
@@ -356,9 +429,11 @@ function mapMessage(message: CommunityMessageEntity): CommunityMessageDto {
     id: message.id,
     communityId: message.communityId,
     clientMessageId: message.clientMessageId,
-    authorId: message.authorId,
-    authorName: message.author.displayName,
+    authorId: message.authorId ?? "system",
+    authorName: message.author?.displayName ?? "헤임달",
     text: message.body,
+    messageType: message.type,
+    debateId: message.debateId,
     createdAt: message.createdAt.toISOString(),
   };
 }

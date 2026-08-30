@@ -4,7 +4,7 @@ import {
   DebateSide,
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
   InteractionalRelationType,
   VerificationStatus,
 } from "../../debates/domain/debate.enums";
@@ -44,7 +44,9 @@ export interface JudgeInput {
     id: string;
     topic: string;
     sideASpeakerId: string;
+    sideASpeakerDisplayName: string;
     sideBSpeakerId: string;
+    sideBSpeakerDisplayName: string;
     rebuttalQuestionRounds: number;
   };
   argumentGraph: {
@@ -60,15 +62,15 @@ export interface JudgeValidationTurn {
   analysisStatus: DebateTurnAnalysisStatus;
 }
 
-export interface JudgeValidationFactCheckBatchTask {
+export interface JudgeValidationFactCheckBatch {
   id: string;
-  status: FactCheckBatchTaskStatus;
+  status: FactCheckBatchStatus;
 }
 
 export interface JudgeValidationContext {
   debateStatus: DebateStatus;
   turns: JudgeValidationTurn[];
-  factCheckBatchTasks: JudgeValidationFactCheckBatchTask[];
+  factCheckBatches: JudgeValidationFactCheckBatch[];
   hasExistingJudgmentResult: boolean;
 }
 

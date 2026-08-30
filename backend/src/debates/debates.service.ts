@@ -21,6 +21,7 @@ import {
   CreateDebateRequest,
   DebateDetailDto,
   DebateDto,
+  DebateInvitationDto,
   DebateResultDto,
 } from "./dto/debate.dto";
 import { DebateEntity } from "./entities/debate.entity";
@@ -31,16 +32,42 @@ import { mapJudgmentResultResponse } from "../judge/dto/judgment-result-response
 import { JudgeReadinessService } from "../judge/judge-readiness.service";
 import { CommunityMemberEntity } from "../community-chat/entities/community-member.entity";
 import { CommunityEntity } from "../community-chat/entities/community.entity";
-import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
-import { getDebateExpiresAt } from "./debate-timeout.constants";
+import {
+  CommunityDebateIntent,
+  CommunityStatus,
+} from "../community-chat/domain/community-chat.enums";
+import { CommunityOpinionEntity } from "../community-chat/entities/community-opinion.entity";
+import {
+  getDebateExpiresAt,
+  getDebateStartsAt,
+} from "./debate-timeout.constants";
 import { DebateChatWebSocketServer } from "../debate-chat/debate-chat.websocket-server";
+import { FactCheckResultEntity } from "./entities/fact-check-result.entity";
+import {
+  FactCheckResultResponseDto,
+  mapFactCheckResultResponse,
+} from "./dto/fact-check-result-response.dto";
+import { CommunityNotificationService } from "../community-chat/community-notification.service";
+
+const DEBATE_INVITATION_TIMEOUT_MS = 5_000;
+
+interface PendingDebateInvitation extends DebateInvitationDto {
+  timeout: ReturnType<typeof setTimeout>;
+}
 
 @Injectable()
 export class DebatesService {
+  private readonly pendingInvitations = new Map<
+    string,
+    PendingDebateInvitation
+  >();
+  private readonly pendingInvitationByCommunity = new Map<string, string>();
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly judgeReadinessService: JudgeReadinessService,
     private readonly websocketServer: DebateChatWebSocketServer,
+    private readonly communityNotificationService: CommunityNotificationService,
   ) {}
 
   async createDebate(input: CreateDebateRequest): Promise<DebateDto> {
@@ -96,10 +123,28 @@ export class DebatesService {
       throw new NotFoundException(`Debate not found: ${id}.`);
     }
 
+    const opinions = await this.dataSource
+      .getRepository(CommunityOpinionEntity)
+      .find({
+        where: {
+          communityId: debate.communityId,
+          authorId: In([debate.sideASpeakerId, debate.sideBSpeakerId]),
+        },
+      });
+    const opinionsByAuthorId = new Map(
+      opinions.map((opinion) => [opinion.authorId, opinion]),
+    );
+
     return {
       ...mapDebateToDto(debate),
-      sideASpeaker: mapSpeaker(debate.sideASpeaker),
-      sideBSpeaker: mapSpeaker(debate.sideBSpeaker),
+      sideASpeaker: mapSpeaker(
+        debate.sideASpeaker,
+        opinionsByAuthorId.get(debate.sideASpeakerId),
+      ),
+      sideBSpeaker: mapSpeaker(
+        debate.sideBSpeaker,
+        opinionsByAuthorId.get(debate.sideBSpeakerId),
+      ),
       viewerSide:
         viewerMemberId === debate.sideASpeakerId
           ? DebateSide.SIDE_A
@@ -114,12 +159,18 @@ export class DebatesService {
     communityId: string,
     hostMemberId: string,
     opponentMemberId: string,
-  ): Promise<DebateDetailDto> {
+  ): Promise<DebateInvitationDto> {
     if (hostMemberId === opponentMemberId) {
       throw new BadRequestException("A member cannot debate themselves.");
     }
 
-    const claimed = await this.dataSource.transaction(async (manager) => {
+    if (this.pendingInvitationByCommunity.has(communityId)) {
+      throw new ConflictException(
+        "This community already has a pending debate invitation.",
+      );
+    }
+
+    const hostName = await this.dataSource.transaction(async (manager) => {
       const community = await manager.findOne(CommunityEntity, {
         where: { id: communityId },
         lock: { mode: "pessimistic_write" },
@@ -133,13 +184,18 @@ export class DebatesService {
         );
       }
 
-      const opponentJoined = await manager.exists(CommunityMemberEntity, {
+      const opponentMembership = await manager.findOne(CommunityMemberEntity, {
         where: { communityId, memberId: opponentMemberId },
       });
-      if (!opponentJoined) {
+      if (!opponentMembership) {
         throw new BadRequestException(
           "The opponent must be a community member.",
         );
+      }
+      if (
+        opponentMembership.debateIntent !== CommunityDebateIntent.OPEN_TO_DEBATE
+      ) {
+        throw new ConflictException("The opponent is not ready to debate.");
       }
 
       const activeStatuses = [
@@ -153,73 +209,202 @@ export class DebatesService {
         order: { createdAt: "DESC" },
       });
       if (existing) {
-        if (
-          existing.sideASpeakerId === hostMemberId &&
-          existing.sideBSpeakerId === opponentMemberId
-        ) {
-          if (existing.status === DebateStatus.READY) {
-            const now = new Date();
-            await manager.update(
-              DebateEntity,
-              { id: existing.id, status: DebateStatus.READY },
-              {
-                status: DebateStatus.IN_PROGRESS,
-                currentPhase: DebatePhase.OPENING,
-                currentRound: 1,
-                currentTurnSide: DebateSide.SIDE_A,
-                currentTurnStartedAt: now,
-                startedAt: now,
-              },
-            );
-            await manager.update(
-              CommunityEntity,
-              { id: communityId },
-              { status: CommunityStatus.ACTIVE },
-            );
-            return { debateId: existing.id, created: true };
-          }
-          return { debateId: existing.id, created: false };
-        }
         throw new ConflictException(
           "This community already has an active debate.",
         );
       }
 
-      const now = new Date();
-      const id = randomUUID();
+      const hostMember = await manager.findOne(MemberEntity, {
+        where: { id: hostMemberId },
+        select: { id: true, displayName: true },
+      });
+      if (!hostMember) {
+        throw new BadRequestException("The community host must exist.");
+      }
+      return hostMember.displayName;
+    });
+
+    if (this.pendingInvitationByCommunity.has(communityId)) {
+      throw new ConflictException(
+        "This community already has a pending debate invitation.",
+      );
+    }
+    const id = randomUUID();
+    const expiresAt = new Date(
+      Date.now() + DEBATE_INVITATION_TIMEOUT_MS,
+    ).toISOString();
+    const dto: DebateInvitationDto = {
+      id,
+      communityId,
+      hostMemberId,
+      hostName,
+      opponentMemberId,
+      expiresAt,
+    };
+    const timeout = setTimeout(
+      () => this.expireDebateInvitation(id),
+      DEBATE_INVITATION_TIMEOUT_MS,
+    );
+    this.pendingInvitations.set(id, { ...dto, timeout });
+    this.pendingInvitationByCommunity.set(communityId, id);
+    this.websocketServer.publishDebateRequested(communityId, opponentMemberId, {
+      invitation: dto,
+    });
+    return dto;
+  }
+
+  async acceptCommunityDebateInvitation(
+    communityId: string,
+    invitationId: string,
+    opponentMemberId: string,
+  ): Promise<DebateDetailDto> {
+    const invitation = this.takeDebateInvitation(
+      communityId,
+      invitationId,
+      opponentMemberId,
+    );
+    const accepted = await this.dataSource.transaction(async (manager) => {
+      const community = await manager.findOne(CommunityEntity, {
+        where: { id: communityId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!community) {
+        throw new NotFoundException(`Community not found: ${communityId}.`);
+      }
+      const membership = await manager.findOne(CommunityMemberEntity, {
+        where: { communityId, memberId: opponentMemberId },
+      });
+      if (
+        !membership ||
+        membership.debateIntent !== CommunityDebateIntent.OPEN_TO_DEBATE
+      ) {
+        throw new ConflictException("The opponent is not ready to debate.");
+      }
+      const speakers = await manager.find(MemberEntity, {
+        where: {
+          id: In([invitation.hostMemberId, invitation.opponentMemberId]),
+        },
+        select: { id: true, displayName: true },
+      });
+      const names = new Map(
+        speakers.map((speaker) => [speaker.id, speaker.displayName]),
+      );
+      const hostName = names.get(invitation.hostMemberId);
+      const opponentName = names.get(invitation.opponentMemberId);
+      if (!hostName || !opponentName) {
+        throw new BadRequestException("Both debate speakers must exist.");
+      }
+      const existing = await manager.findOne(DebateEntity, {
+        where: {
+          communityId,
+          status: In([
+            DebateStatus.READY,
+            DebateStatus.IN_PROGRESS,
+            DebateStatus.DEBATE_FINALIZED,
+            DebateStatus.JUDGING,
+          ]),
+        },
+      });
+      if (existing) {
+        throw new ConflictException(
+          "This community already has an active debate.",
+        );
+      }
+      const startsAt = getDebateStartsAt();
+      const debateId = randomUUID();
       await manager.insert(DebateEntity, {
-        id,
+        id: debateId,
         communityId,
         topic: community.topic,
-        sideASpeakerId: hostMemberId,
-        sideBSpeakerId: opponentMemberId,
+        sideASpeakerId: invitation.hostMemberId,
+        sideBSpeakerId: invitation.opponentMemberId,
         rebuttalQuestionRounds: community.rounds,
         status: DebateStatus.IN_PROGRESS,
         currentPhase: DebatePhase.OPENING,
         currentRound: 1,
         currentTurnSide: DebateSide.SIDE_A,
-        currentTurnStartedAt: now,
-        startedAt: now,
+        currentTurnStartedAt: startsAt,
+        startedAt: startsAt,
       });
       await manager.update(
         CommunityEntity,
         { id: communityId },
         { status: CommunityStatus.ACTIVE },
       );
-      return { debateId: id, created: true };
+      const notification =
+        await this.communityNotificationService.createDebateStarted(
+          manager,
+          communityId,
+          debateId,
+          hostName,
+          opponentName,
+        );
+      return { debateId, notification };
     });
 
-    const detail = await this.getDebateDetail(claimed.debateId, hostMemberId);
-    if (claimed.created) {
-      this.websocketServer.publishDebateStarted(communityId, {
-        debateId: detail.id,
-        sideASpeaker: detail.sideASpeaker,
-        sideBSpeaker: detail.sideBSpeaker,
-        startedAt: detail.startedAt,
-        expiresAt: detail.expiresAt,
-      });
-    }
+    const detail = await this.getDebateDetail(
+      accepted.debateId,
+      opponentMemberId,
+    );
+    this.communityNotificationService.publish(accepted.notification);
+    this.websocketServer.publishDebateStarted(communityId, {
+      debateId: detail.id,
+      sideASpeaker: detail.sideASpeaker,
+      sideBSpeaker: detail.sideBSpeaker,
+      startedAt: detail.startedAt,
+      expiresAt: detail.expiresAt,
+    });
     return detail;
+  }
+
+  async rejectCommunityDebateInvitation(
+    communityId: string,
+    invitationId: string,
+    opponentMemberId: string,
+  ): Promise<void> {
+    const invitation = this.takeDebateInvitation(
+      communityId,
+      invitationId,
+      opponentMemberId,
+    );
+    this.websocketServer.publishDebateRequestRejected(
+      communityId,
+      invitation.hostMemberId,
+      { invitationId, opponentMemberId },
+    );
+  }
+
+  private takeDebateInvitation(
+    communityId: string,
+    invitationId: string,
+    opponentMemberId: string,
+  ): PendingDebateInvitation {
+    const invitation = this.pendingInvitations.get(invitationId);
+    if (!invitation || invitation.communityId !== communityId) {
+      throw new NotFoundException(
+        `Debate invitation not found or expired: ${invitationId}.`,
+      );
+    }
+    if (invitation.opponentMemberId !== opponentMemberId) {
+      throw new ConflictException("Only the invited member can respond.");
+    }
+    clearTimeout(invitation.timeout);
+    this.pendingInvitations.delete(invitationId);
+    this.pendingInvitationByCommunity.delete(communityId);
+    return invitation;
+  }
+
+  private expireDebateInvitation(invitationId: string): void {
+    const invitation = this.pendingInvitations.get(invitationId);
+    if (!invitation) return;
+    this.pendingInvitations.delete(invitationId);
+    this.pendingInvitationByCommunity.delete(invitation.communityId);
+    this.websocketServer.publishDebateRequestExpired(
+      invitation.communityId,
+      invitation.hostMemberId,
+      invitation.opponentMemberId,
+      { invitationId },
+    );
   }
 
   async getActiveCommunityDebate(
@@ -306,6 +491,8 @@ export class DebatesService {
       throw new NotFoundException(`JudgmentResult not found: ${id}.`);
     }
 
+    const factChecks = await this.findDebateFactChecks(id);
+
     return {
       debate: mapDebateToDto(debate),
       viewerSide:
@@ -315,7 +502,26 @@ export class DebatesService {
             ? DebateSide.SIDE_B
             : null,
       judgmentResult: mapJudgmentResultResponse(judgmentResult),
+      factChecks,
     };
+  }
+
+  private async findDebateFactChecks(
+    debateId: string,
+  ): Promise<FactCheckResultResponseDto[]> {
+    const results = await this.dataSource
+      .getRepository(FactCheckResultEntity)
+      .createQueryBuilder("factCheck")
+      .innerJoinAndSelect("factCheck.component", "component")
+      .innerJoinAndSelect("component.turn", "turn")
+      .leftJoinAndSelect("factCheck.sources", "source")
+      .where("turn.debate_id = :debateId", { debateId })
+      .orderBy("turn.sequence", "ASC")
+      .addOrderBy("component.createdAt", "ASC")
+      .addOrderBy("source.createdAt", "ASC")
+      .getMany();
+
+    return results.map(mapFactCheckResultResponse);
   }
 
   async startDebate(id: string): Promise<DebateDto> {
@@ -335,7 +541,7 @@ export class DebatesService {
       throw new ConflictException(`Debate cannot start from ${debate.status}.`);
     }
 
-    const now = new Date();
+    const startsAt = getDebateStartsAt();
     const updateResult = await this.dataSource
       .createQueryBuilder()
       .update(DebateEntity)
@@ -344,8 +550,8 @@ export class DebatesService {
         currentPhase: DebatePhase.OPENING,
         currentRound: 1,
         currentTurnSide: DebateSide.SIDE_A,
-        currentTurnStartedAt: now,
-        startedAt: now,
+        currentTurnStartedAt: startsAt,
+        startedAt: startsAt,
       })
       .where("id = :id", { id })
       .andWhere("status = :status", { status: DebateStatus.READY })
@@ -547,20 +753,31 @@ function mapDebateToDto(debate: DebateEntity): DebateDto {
     startedAt: debate.startedAt?.toISOString() ?? null,
     endedAt: debate.endedAt?.toISOString() ?? null,
     judgingStartedAt: debate.judgingStartedAt?.toISOString() ?? null,
-    expiresAt: getDebateExpiresAt(debate.startedAt)?.toISOString() ?? null,
+    expiresAt:
+      getDebateExpiresAt(
+        debate.startedAt,
+        debate.rebuttalQuestionRounds,
+      )?.toISOString() ?? null,
   };
 }
 
-function mapSpeaker(member: MemberEntity): {
+function mapSpeaker(
+  member: MemberEntity,
+  opinion?: CommunityOpinionEntity,
+): {
   id: string;
   displayName: string;
   profileImageUrl: string | null;
   score: number;
+  claim: string;
+  reasons: string[];
 } {
   return {
     id: member.id,
     displayName: member.displayName,
     profileImageUrl: member.profileImageUrl,
     score: member.score,
+    claim: opinion?.claim ?? "",
+    reasons: opinion?.reasons ?? [],
   };
 }

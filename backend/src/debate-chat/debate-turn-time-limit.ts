@@ -1,7 +1,10 @@
 import { DebatePhase } from "../debates/domain/debate.enums";
+import {
+  DEFAULT_TURN_LIMIT_SECONDS,
+  OPENING_TURN_LIMIT_SECONDS,
+} from "../debates/debate-timeout.constants";
 
-export const OPENING_TURN_LIMIT_SECONDS = 90;
-export const DEFAULT_TURN_LIMIT_SECONDS = 180;
+export { DEFAULT_TURN_LIMIT_SECONDS, OPENING_TURN_LIMIT_SECONDS };
 
 export function getDebateTurnLimitSeconds(phase: DebatePhase): number {
   return phase === DebatePhase.OPENING || phase === DebatePhase.CLOSING

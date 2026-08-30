@@ -19,7 +19,7 @@ export const FACT_CHECK_BATCH_RESPONSE_SCHEMA = {
               "PARTIALLY_SUPPORTED",
               "INSUFFICIENT_EVIDENCE",
               "NOT_VERIFIABLE",
-              "OUTDATED_OR_TIME_SENSITIVE",
+              "OUTDATED",
             ],
           },
           reason: { type: "string" },

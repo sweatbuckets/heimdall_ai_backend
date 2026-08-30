@@ -4,7 +4,7 @@ import {
   DebateSide,
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
   VerificationStatus,
 } from "../../debates/domain/debate.enums";
 import { JudgeInput, JudgeValidationContext } from "../dto/judge.dto";
@@ -17,7 +17,9 @@ describe("validateJudgeInput", () => {
       id: "debate-1",
       topic: "Should attendance count toward grades?",
       sideASpeakerId: "speaker-a",
+      sideASpeakerDisplayName: "Alice",
       sideBSpeakerId: "speaker-b",
+      sideBSpeakerDisplayName: "Bob",
       rebuttalQuestionRounds: 2,
     },
     argumentGraph: {
@@ -70,10 +72,10 @@ describe("validateJudgeInput", () => {
         analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
       },
     ],
-    factCheckBatchTasks: [
+    factCheckBatches: [
       {
         id: "task-1",
-        status: FactCheckBatchTaskStatus.COMPLETED,
+        status: FactCheckBatchStatus.COMPLETED,
       },
     ],
     hasExistingJudgmentResult: false,
@@ -110,10 +112,10 @@ describe("validateJudgeInput", () => {
     expect(() =>
       validateJudgeInput(input, {
         ...context,
-        factCheckBatchTasks: [
+        factCheckBatches: [
           {
             id: "task-1",
-            status: FactCheckBatchTaskStatus.PENDING,
+            status: FactCheckBatchStatus.PENDING,
           },
         ],
       }),
@@ -204,6 +206,18 @@ describe("validateJudgeInput", () => {
               input.argumentGraph.components[1],
             ],
           },
+        },
+        context,
+      ),
+    ).toThrow(JudgeInputError);
+  });
+
+  it("rejects an empty speaker display name", () => {
+    expect(() =>
+      validateJudgeInput(
+        {
+          ...input,
+          debate: { ...input.debate, sideASpeakerDisplayName: " " },
         },
         context,
       ),

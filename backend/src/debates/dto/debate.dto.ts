@@ -1,6 +1,7 @@
 import { DebatePhase, DebateSide, DebateStatus } from "../domain/debate.enums";
 import { JudgmentResultResponseDto } from "../../judge/dto/judgment-result-response.dto";
 import { DebateTurnWithVotesDto } from "./debate-turn-vote.dto";
+import { FactCheckResultResponseDto } from "./fact-check-result-response.dto";
 
 export interface CreateDebateRequest {
   communityId: string;
@@ -41,14 +42,26 @@ export interface DebateSpeakerDto {
   displayName: string;
   profileImageUrl: string | null;
   score: number;
+  claim: string;
+  reasons: string[];
 }
 
 export interface StartCommunityDebateRequest {
   opponentMemberId: string;
 }
 
+export interface DebateInvitationDto {
+  id: string;
+  communityId: string;
+  hostMemberId: string;
+  hostName: string;
+  opponentMemberId: string;
+  expiresAt: string;
+}
+
 export interface DebateResultDto {
   debate: DebateDto;
   viewerSide: DebateSide | null;
   judgmentResult: JudgmentResultResponseDto;
+  factChecks: FactCheckResultResponseDto[];
 }

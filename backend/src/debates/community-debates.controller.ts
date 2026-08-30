@@ -3,7 +3,7 @@ import { AuthPrincipal } from "../auth/dto/auth.dto";
 import { CurrentMember } from "../auth/current-member.decorator";
 import { assertUuid } from "../common/http/id.validator";
 import { DebatesService } from "./debates.service";
-import { DebateDetailDto } from "./dto/debate.dto";
+import { DebateDetailDto, DebateInvitationDto } from "./dto/debate.dto";
 import { validateStartCommunityDebateRequest } from "./validators/start-community-debate.validator";
 
 @Controller("communities/:communityId/debates")
@@ -15,7 +15,7 @@ export class CommunityDebatesController {
     @Param("communityId") communityId: string,
     @CurrentMember() principal: AuthPrincipal,
     @Body() body: unknown,
-  ): Promise<DebateDetailDto> {
+  ): Promise<DebateInvitationDto> {
     assertUuid(communityId, "communityId");
     const input = validateStartCommunityDebateRequest(body);
     assertUuid(input.opponentMemberId, "opponentMemberId");
@@ -34,6 +34,36 @@ export class CommunityDebatesController {
     assertUuid(communityId, "communityId");
     return this.debatesService.getActiveCommunityDebate(
       communityId,
+      principal.memberId,
+    );
+  }
+
+  @Post(":invitationId/accept")
+  async accept(
+    @Param("communityId") communityId: string,
+    @Param("invitationId") invitationId: string,
+    @CurrentMember() principal: AuthPrincipal,
+  ): Promise<DebateDetailDto> {
+    assertUuid(communityId, "communityId");
+    assertUuid(invitationId, "invitationId");
+    return this.debatesService.acceptCommunityDebateInvitation(
+      communityId,
+      invitationId,
+      principal.memberId,
+    );
+  }
+
+  @Post(":invitationId/reject")
+  async reject(
+    @Param("communityId") communityId: string,
+    @Param("invitationId") invitationId: string,
+    @CurrentMember() principal: AuthPrincipal,
+  ): Promise<void> {
+    assertUuid(communityId, "communityId");
+    assertUuid(invitationId, "invitationId");
+    await this.debatesService.rejectCommunityDebateInvitation(
+      communityId,
+      invitationId,
       principal.memberId,
     );
   }

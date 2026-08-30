@@ -40,7 +40,26 @@ export enum InteractionalRelationType {
   ANSWERS = "ANSWERS",
 }
 
-export enum FactCheckBatchTaskStatus {
+export enum FactCheckBatchStatus {
+  PENDING = "PENDING",
+  PROCESSING = "PROCESSING",
+  COMPLETED = "COMPLETED",
+  FAILED = "FAILED",
+}
+
+export enum FactCheckStage {
+  GROUNDING = "GROUNDING",
+  SYNTHESIS = "SYNTHESIS",
+}
+
+export enum FactCheckStageTaskStatus {
+  PENDING = "PENDING",
+  PROCESSING = "PROCESSING",
+  COMPLETED = "COMPLETED",
+  FAILED = "FAILED",
+}
+
+export enum JudgeTaskStatus {
   PENDING = "PENDING",
   PROCESSING = "PROCESSING",
   COMPLETED = "COMPLETED",
@@ -53,7 +72,7 @@ export enum VerificationStatus {
   PARTIALLY_SUPPORTED = "PARTIALLY_SUPPORTED",
   INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE",
   NOT_VERIFIABLE = "NOT_VERIFIABLE",
-  OUTDATED_OR_TIME_SENSITIVE = "OUTDATED_OR_TIME_SENSITIVE",
+  OUTDATED = "OUTDATED",
 }
 
 export enum JudgmentWinner {

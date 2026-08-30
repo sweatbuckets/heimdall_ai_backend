@@ -8,6 +8,7 @@ import {
   Param,
   Post,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { CurrentMember } from "../auth/current-member.decorator";
 import { AuthPrincipal } from "../auth/dto/auth.dto";
 import { randomUUID } from "node:crypto";
@@ -37,7 +38,10 @@ export interface DebateChatSnapshotResponse {
 
 @Controller("debates/:debateId/chat")
 export class DebateChatController {
-  constructor(private readonly debateChatService: DebateChatService) {}
+  constructor(
+    private readonly debateChatService: DebateChatService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Get()
   async getSnapshot(
@@ -57,7 +61,11 @@ export class DebateChatController {
     assertUuid(debateId, "debateId");
 
     try {
-      const command = buildMessageSendCommand(debateId, body);
+      const command = buildMessageSendCommand(
+        debateId,
+        body,
+        this.configService.get<number>("DEBATE_TURN_MAX_CONTENT_LENGTH", 500),
+      );
       assertAuthenticatedSpeaker(command.payload.speakerId, principal);
       return await this.debateChatService.appendDraftMessage(debateId, command);
     } catch (error) {
@@ -97,6 +105,7 @@ function assertAuthenticatedSpeaker(
 function buildMessageSendCommand(
   debateId: string,
   body: unknown,
+  maxMessageLength: number,
 ): DebateTurnMessageSendCommand {
   const raw = isRecord(body) ? body : {};
   const command = parseDebateChatCommand(
@@ -108,6 +117,7 @@ function buildMessageSendCommand(
       payload: readPayload(raw),
       sentAt: readOptionalString(raw, "sentAt"),
     }),
+    maxMessageLength,
   );
 
   if (command.type !== DEBATE_TURN_MESSAGE_SEND_COMMAND) {

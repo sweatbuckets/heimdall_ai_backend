@@ -5,7 +5,7 @@ import { AssembledJudgeInput } from "./dto/judge.dto";
 import { JudgeInputError } from "./errors/judge.errors";
 import { ArgumentalRelationEntity } from "../debates/entities/argumental-relation.entity";
 import { DebateEntity } from "../debates/entities/debate.entity";
-import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
+import { FactCheckBatchEntity } from "../debates/entities/fact-check-batch.entity";
 import { FactCheckResultEntity } from "../debates/entities/fact-check-result.entity";
 import { InteractionalRelationEntity } from "../debates/entities/interactional-relation.entity";
 import { JudgmentResultEntity } from "../debates/entities/judgment-result.entity";
@@ -21,8 +21,8 @@ export class JudgeInputAssembler {
     private readonly interactionalRelationRepository: Repository<InteractionalRelationEntity>,
     @InjectRepository(FactCheckResultEntity)
     private readonly factCheckResultRepository: Repository<FactCheckResultEntity>,
-    @InjectRepository(FactCheckBatchTaskEntity)
-    private readonly factCheckBatchTaskRepository: Repository<FactCheckBatchTaskEntity>,
+    @InjectRepository(FactCheckBatchEntity)
+    private readonly factCheckBatchRepository: Repository<FactCheckBatchEntity>,
     @InjectRepository(JudgmentResultEntity)
     private readonly judgmentResultRepository: Repository<JudgmentResultEntity>,
   ) {}
@@ -30,6 +30,8 @@ export class JudgeInputAssembler {
   async assemble(debateId: string): Promise<AssembledJudgeInput> {
     const debate = await this.debateRepository
       .createQueryBuilder("debate")
+      .innerJoinAndSelect("debate.sideASpeaker", "sideASpeaker")
+      .innerJoinAndSelect("debate.sideBSpeaker", "sideBSpeaker")
       .leftJoinAndSelect("debate.turns", "turn")
       .leftJoinAndSelect("turn.components", "component")
       .where("debate.id = :debateId", { debateId })
@@ -51,13 +53,13 @@ export class JudgeInputAssembler {
       argumentalRelations,
       interactionalRelations,
       factCheckResults,
-      factCheckBatchTasks,
+      factCheckBatches,
       existingJudgmentResult,
     ] = await Promise.all([
       this.findArgumentalRelations(componentIds),
       this.findInteractionalRelations(componentIds),
       this.findFactCheckResults(componentIds),
-      this.findFactCheckBatchTasks(debateId),
+      this.findFactCheckBatches(debateId),
       this.judgmentResultRepository.findOne({ where: { debateId } }),
     ]);
 
@@ -67,7 +69,9 @@ export class JudgeInputAssembler {
           id: debate.id,
           topic: debate.topic,
           sideASpeakerId: debate.sideASpeakerId,
+          sideASpeakerDisplayName: debate.sideASpeaker.displayName,
           sideBSpeakerId: debate.sideBSpeakerId,
+          sideBSpeakerDisplayName: debate.sideBSpeaker.displayName,
           rebuttalQuestionRounds: debate.rebuttalQuestionRounds,
         },
         argumentGraph: {
@@ -107,9 +111,9 @@ export class JudgeInputAssembler {
           id: turn.id,
           analysisStatus: turn.analysisStatus,
         })),
-        factCheckBatchTasks: factCheckBatchTasks.map((task) => ({
-          id: task.id,
-          status: task.status,
+        factCheckBatches: factCheckBatches.map((batch) => ({
+          id: batch.id,
+          status: batch.status,
         })),
         hasExistingJudgmentResult: Boolean(existingJudgmentResult),
       },
@@ -160,13 +164,9 @@ export class JudgeInputAssembler {
     });
   }
 
-  private async findFactCheckBatchTasks(
+  private async findFactCheckBatches(
     debateId: string,
-  ): Promise<FactCheckBatchTaskEntity[]> {
-    return this.factCheckBatchTaskRepository
-      .createQueryBuilder("task")
-      .innerJoin("task.turn", "turn")
-      .where("turn.debate_id = :debateId", { debateId })
-      .getMany();
+  ): Promise<FactCheckBatchEntity[]> {
+    return this.factCheckBatchRepository.find({ where: { debateId } });
   }
 }

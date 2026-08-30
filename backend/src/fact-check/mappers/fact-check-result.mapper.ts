@@ -12,7 +12,7 @@ export interface FactCheckResultEntityMapping {
 }
 
 export function mapFactCheckBatchOutputToEntities(
-  factCheckBatchTaskId: string,
+  factCheckBatchId: string,
   output: FactCheckBatchOutput,
   groundedEvidence: GroundedEvidenceBundle,
   checkedAt: Date,
@@ -28,7 +28,7 @@ export function mapFactCheckBatchOutputToEntities(
 
     results.push({
       id: factCheckResultId,
-      factCheckBatchTaskId,
+      factCheckBatchId,
       componentId: result.componentId,
       status: result.status,
       reason: result.reason.trim(),

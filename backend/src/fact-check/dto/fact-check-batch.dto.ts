@@ -1,8 +1,15 @@
-import { VerificationStatus } from "../../debates/domain/debate.enums";
+import {
+  DebatePhase,
+  DebateSide,
+  VerificationStatus,
+} from "../../debates/domain/debate.enums";
 
 export interface FactCheckTarget {
   componentId: string;
   statement: string;
+  turnId: string;
+  sequence: number;
+  speakerSide: DebateSide;
 }
 
 export interface FactCheckBatchInput {
@@ -10,9 +17,9 @@ export interface FactCheckBatchInput {
     id: string;
     topic: string;
   };
-  turn: {
-    id: string;
-    sequence: number;
+  round: {
+    phase: DebatePhase;
+    number: number;
   };
   targets: FactCheckTarget[];
 }

@@ -7,6 +7,7 @@ export const DEBATE_CONNECTION_RESTORED_EVENT = "connection.restored";
 export const DEBATE_TURN_MESSAGE_ACK_EVENT = "debate.turn.message.ack";
 export const DEBATE_TURN_MESSAGE_CREATED_EVENT = "debate.turn.message.created";
 export const DEBATE_TURN_FINALIZED_EVENT = "debate.turn.finalized";
+export const DEBATE_PROCESSING_STAGE_EVENT = "debate.processing.stage";
 export const DEBATE_CHAT_ERROR_EVENT = "error";
 
 export const DEBATE_TURN_MESSAGE_APPEND_STATUS_APPENDED = "APPENDED";
@@ -137,10 +138,22 @@ export interface DebateEndedEvent {
   reason: string | null;
 }
 
+export interface DebateProcessingStageEvent {
+  id: string;
+  type: typeof DEBATE_PROCESSING_STAGE_EVENT;
+  debateId: string;
+  stage: "ANALYZER" | "FACT_CHECK" | "JUDGE";
+  status: "STARTED" | "RETRYING" | "COMPLETED" | "FAILED";
+  attempt: number;
+  message: string;
+  occurredAt: string;
+}
+
 export type DebateChatServerEvent =
   | DebateConnectionRestoredEvent
   | DebateTurnMessageAckEvent
   | DebateTurnMessageCreatedEvent
   | DebateTurnFinalizedEvent
   | DebateEndedEvent
+  | DebateProcessingStageEvent
   | DebateChatErrorEvent;

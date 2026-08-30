@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { InjectQueue } from "@nestjs/bullmq";
-import { Job, Queue } from "bullmq";
-import { DataSource } from "typeorm";
+import { Job } from "bullmq";
+import { DataSource, LessThan } from "typeorm";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import {
@@ -16,26 +15,25 @@ import {
 } from "./mappers/analyze-turn-entity.mapper";
 import {
   AnalyzeTurnConflictError,
+  AnalyzeTurnDependencyPendingError,
   AnalyzeTurnInputError,
 } from "./errors/analyzer.errors";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { ArgumentalRelationEntity } from "../debates/entities/argumental-relation.entity";
 import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
-import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
+import { FactCheckBatchEntity } from "../debates/entities/fact-check-batch.entity";
 import { FactCheckBatchTargetEntity } from "../debates/entities/fact-check-batch-target.entity";
+import { FactCheckStageTaskEntity } from "../debates/entities/fact-check-stage-task.entity";
 import {
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
+  FactCheckStage,
+  FactCheckStageTaskStatus,
 } from "../debates/domain/debate.enums";
 import { InteractionalRelationEntity } from "../debates/entities/interactional-relation.entity";
-import {
-  FACT_CHECK_BATCH_JOB,
-  FACT_CHECK_QUEUE,
-  FactCheckJobData,
-} from "../fact-check/queues/fact-check.constants";
-import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
-import { JudgeReadinessService } from "../judge/judge-readiness.service";
+import { FactCheckQueueService } from "../fact-check/fact-check-queue.service";
+import { AnalyzeRoundJobData } from "./queues/analyzer-job.data";
 import {
   AiInvocationCancellationService,
   AiInvocationCancelledError,
@@ -47,7 +45,7 @@ export interface AnalyzeTurnResult {
   componentCount: number;
   argumentalRelationCount: number;
   interactionalRelationCount: number;
-  factCheckBatchTaskId: string | null;
+  factCheckBatchId: string | null;
   skipped: boolean;
 }
 
@@ -58,19 +56,17 @@ export class AnalyzeTurnService {
     private readonly analyzerInputAssembler: AnalyzerInputAssembler,
     private readonly analyzerAiService: AnalyzerAiService,
     private readonly configService: ConfigService,
-    @InjectQueue(FACT_CHECK_QUEUE)
-    private readonly factCheckQueue: Queue<FactCheckJobData>,
-    private readonly judgeReadinessService: JudgeReadinessService,
+    private readonly factCheckQueueService: FactCheckQueueService,
     private readonly aiCancellationService: AiInvocationCancellationService,
   ) {}
 
   async analyzeTurn(
     turnId: string,
-    job?: Job<AnalyzeTurnJobData>,
+    job?: Job<AnalyzeRoundJobData>,
   ): Promise<AnalyzeTurnResult> {
-    const claimed = await this.claimTurnForAnalysis(turnId);
+    const claimedTurnIds = await this.claimRoundForAnalysis(turnId);
 
-    if (!claimed) {
+    if (!claimedTurnIds) {
       return this.handleUnclaimedTurn(turnId);
     }
 
@@ -84,7 +80,8 @@ export class AnalyzeTurnService {
       validateAnalyzeTurnOutput(input, output, limits);
 
       const mapping = mapAnalyzeTurnOutputToEntities(input, output);
-      let factCheckBatchTaskId: string | null = null;
+      let factCheckBatchId: string | null = null;
+      let groundingTaskId: string | null = null;
 
       await this.dataSource.transaction(async (manager) => {
         const debate = await manager.findOne(DebateEntity, {
@@ -113,22 +110,42 @@ export class AnalyzeTurnService {
           );
         }
 
-        if (mapping.factCheckTargetComponentIds.length > 0) {
-          factCheckBatchTaskId = randomUUID();
-
-          await manager.insert(FactCheckBatchTaskEntity, {
-            id: factCheckBatchTaskId,
-            turnId,
-            status: FactCheckBatchTaskStatus.PENDING,
+        const targetComponentIds = output.newComponents
+          .filter((component) => component.requiresFactCheck)
+          .map((component) => {
+            const componentId = mapping.localKeyToComponentId.get(
+              component.localKey,
+            );
+            if (!componentId) {
+              throw new AnalyzeTurnConflictError(
+                `Fact-check target component mapping is missing: ${component.localKey}.`,
+              );
+            }
+            return componentId;
           });
 
+        if (targetComponentIds.length > 0) {
+          const firstTurn = input.currentTurns[0];
+          factCheckBatchId = randomUUID();
+          groundingTaskId = randomUUID();
+          await manager.insert(FactCheckBatchEntity, {
+            id: factCheckBatchId,
+            debateId: input.debate.id,
+            phase: firstTurn.phase,
+            round: firstTurn.round,
+            status: FactCheckBatchStatus.PENDING,
+          });
           await manager.insert(
             FactCheckBatchTargetEntity,
-            mapFactCheckTargets(
-              factCheckBatchTaskId,
-              mapping.factCheckTargetComponentIds,
-            ),
+            mapFactCheckTargets(factCheckBatchId, targetComponentIds),
           );
+          await manager.insert(FactCheckStageTaskEntity, {
+            id: groundingTaskId,
+            factCheckBatchId,
+            stage: FactCheckStage.GROUNDING,
+            status: FactCheckStageTaskStatus.PENDING,
+            attemptCount: 0,
+          });
         }
 
         const completeResult = await manager
@@ -138,42 +155,40 @@ export class AnalyzeTurnService {
             analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
             analysisProcessingStartedAt: null,
           })
-          .where("id = :turnId", { turnId })
+          .where("id IN (:...turnIds)", { turnIds: claimedTurnIds })
           .andWhere("analysis_status = :status", {
             status: DebateTurnAnalysisStatus.PROCESSING,
           })
           .execute();
 
-        if (completeResult.affected !== 1) {
+        if (completeResult.affected !== claimedTurnIds.length) {
           throw new AnalyzeTurnConflictError(
-            `DebateTurn analysis completion state changed: ${turnId}.`,
+            `Debate round analysis completion state changed: ${claimedTurnIds.join(",")}.`,
           );
         }
       });
 
-      if (factCheckBatchTaskId && this.isFactCheckEnabled()) {
-        await this.enqueueFactCheckBatch(factCheckBatchTaskId);
+      if (this.isFactCheckEnabled() && groundingTaskId) {
+        await this.factCheckQueueService.enqueueGroundingTask(groundingTaskId);
       }
-
-      await this.judgeReadinessService.tryStartJudge(input.debate.id);
 
       return {
         turnId,
         componentCount: mapping.components.length,
         argumentalRelationCount: mapping.argumentalRelations.length,
         interactionalRelationCount: mapping.interactionalRelations.length,
-        factCheckBatchTaskId,
+        factCheckBatchId,
         skipped: false,
       };
     } catch (error) {
-      await this.releaseOrFailTurnAnalysis(turnId, job);
+      await this.releaseOrFailRoundAnalysis(claimedTurnIds, job);
       if (error instanceof AiInvocationCancelledError) {
         return {
           turnId,
           componentCount: 0,
           argumentalRelationCount: 0,
           interactionalRelationCount: 0,
-          factCheckBatchTaskId: null,
+          factCheckBatchId: null,
           skipped: true,
         };
       }
@@ -181,7 +196,33 @@ export class AnalyzeTurnService {
     }
   }
 
-  private async claimTurnForAnalysis(turnId: string): Promise<boolean> {
+  private async claimRoundForAnalysis(
+    turnId: string,
+  ): Promise<string[] | null> {
+    const turnRepository = this.dataSource.getRepository(DebateTurnEntity);
+    const requestedTurn = await turnRepository.findOne({
+      where: { id: turnId },
+    });
+
+    if (!requestedTurn) {
+      throw new AnalyzeTurnInputError(`DebateTurn not found: ${turnId}.`);
+    }
+
+    const roundTurns = await turnRepository.find({
+      where: {
+        debateId: requestedTurn.debateId,
+        phase: requestedTurn.phase,
+        round: requestedTurn.round,
+      },
+      order: { sequence: "ASC" },
+    });
+
+    if (roundTurns.length !== 2) {
+      return null;
+    }
+
+    const turnIds = roundTurns.map((turn) => turn.id);
+    const firstSequence = roundTurns[0].sequence;
     const result = await this.dataSource
       .createQueryBuilder()
       .update(DebateTurnEntity)
@@ -189,13 +230,36 @@ export class AnalyzeTurnService {
         analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
         analysisProcessingStartedAt: new Date(),
       })
-      .where("id = :turnId", { turnId })
+      .where("id IN (:...turnIds)", { turnIds })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PENDING,
       })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM "debate_turn" "round_turn"
+          WHERE "round_turn"."id" IN (:...turnIds)
+            AND "round_turn"."analysis_status" <> :pendingStatus
+        )`,
+        { pendingStatus: DebateTurnAnalysisStatus.PENDING },
+      )
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM "debate_turn" "previous_turn"
+          WHERE "previous_turn"."debate_id" = :debateId
+            AND "previous_turn"."sequence" < :firstSequence
+            AND "previous_turn"."analysis_status" <> :completedStatus
+        )`,
+        {
+          debateId: requestedTurn.debateId,
+          firstSequence,
+          completedStatus: DebateTurnAnalysisStatus.COMPLETED,
+        },
+      )
       .execute();
 
-    return result.affected === 1;
+    return result.affected === turnIds.length ? turnIds : null;
   }
 
   private async handleUnclaimedTurn(
@@ -213,6 +277,29 @@ export class AnalyzeTurnService {
       return this.getCompletedAnalysisResult(turnId);
     }
 
+    const failedPredecessorCount = await this.dataSource
+      .getRepository(DebateTurnEntity)
+      .count({
+        where: {
+          debateId: turn.debateId,
+          sequence: LessThan(turn.sequence),
+          analysisStatus: DebateTurnAnalysisStatus.FAILED,
+        },
+      });
+
+    if (failedPredecessorCount > 0) {
+      throw new AnalyzeTurnConflictError(
+        `Debate round cannot be analyzed because an earlier round failed: ${turnId}.`,
+      );
+    }
+
+    if (
+      turn.analysisStatus === DebateTurnAnalysisStatus.PENDING ||
+      turn.analysisStatus === DebateTurnAnalysisStatus.PROCESSING
+    ) {
+      throw new AnalyzeTurnDependencyPendingError(turnId);
+    }
+
     throw new AnalyzeTurnConflictError(
       `DebateTurn cannot be claimed for analysis: ${turnId} (${turn.analysisStatus}).`,
     );
@@ -224,34 +311,37 @@ export class AnalyzeTurnService {
     const componentRepository = this.dataSource.getRepository(
       ArgumentComponentEntity,
     );
-    const taskRepository = this.dataSource.getRepository(
-      FactCheckBatchTaskEntity,
-    );
-
-    const [componentCount, factCheckBatchTask] = await Promise.all([
-      componentRepository.count({
-        where: { turnId },
-      }),
-      taskRepository.findOne({
-        where: { turnId },
-      }),
-    ]);
-
-    if (
-      factCheckBatchTask?.status === FactCheckBatchTaskStatus.PENDING &&
-      factCheckBatchTask.id &&
-      this.isFactCheckEnabled()
-    ) {
-      await this.enqueueFactCheckBatch(factCheckBatchTask.id);
-    }
-
     const turn = await this.dataSource.getRepository(DebateTurnEntity).findOne({
       where: { id: turnId },
-      select: { debateId: true },
     });
-
-    if (turn) {
-      await this.judgeReadinessService.tryStartJudge(turn.debateId);
+    const componentCount = await componentRepository.count({
+      where: { turnId },
+    });
+    const factCheckBatch = turn
+      ? await this.dataSource.getRepository(FactCheckBatchEntity).findOne({
+          where: {
+            debateId: turn.debateId,
+            phase: turn.phase,
+            round: turn.round,
+          },
+        })
+      : null;
+    if (
+      factCheckBatch?.status === FactCheckBatchStatus.PENDING &&
+      this.isFactCheckEnabled()
+    ) {
+      const groundingTask = await this.dataSource
+        .getRepository(FactCheckStageTaskEntity)
+        .findOne({
+          where: {
+            factCheckBatchId: factCheckBatch.id,
+            stage: FactCheckStage.GROUNDING,
+            status: FactCheckStageTaskStatus.PENDING,
+          },
+        });
+      if (groundingTask) {
+        await this.factCheckQueueService.enqueueGroundingTask(groundingTask.id);
+      }
     }
 
     return {
@@ -259,14 +349,14 @@ export class AnalyzeTurnService {
       componentCount,
       argumentalRelationCount: 0,
       interactionalRelationCount: 0,
-      factCheckBatchTaskId: factCheckBatchTask?.id ?? null,
+      factCheckBatchId: factCheckBatch?.id ?? null,
       skipped: true,
     };
   }
 
-  private async releaseOrFailTurnAnalysis(
-    turnId: string,
-    job: Job<AnalyzeTurnJobData> | undefined,
+  private async releaseOrFailRoundAnalysis(
+    turnIds: string[],
+    job: Job<AnalyzeRoundJobData> | undefined,
   ): Promise<void> {
     const nextStatus = this.isFinalAttempt(job)
       ? DebateTurnAnalysisStatus.FAILED
@@ -279,14 +369,14 @@ export class AnalyzeTurnService {
         analysisStatus: nextStatus,
         analysisProcessingStartedAt: null,
       })
-      .where("id = :turnId", { turnId })
+      .where("id IN (:...turnIds)", { turnIds })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PROCESSING,
       })
       .execute();
   }
 
-  private isFinalAttempt(job: Job<AnalyzeTurnJobData> | undefined): boolean {
+  private isFinalAttempt(job: Job<AnalyzeRoundJobData> | undefined): boolean {
     if (!job) {
       return true;
     }
@@ -295,35 +385,6 @@ export class AnalyzeTurnService {
       typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
 
     return job.attemptsMade + 1 >= attempts;
-  }
-
-  private async enqueueFactCheckBatch(
-    factCheckBatchTaskId: string,
-  ): Promise<void> {
-    const job = await this.factCheckQueue.add(
-      FACT_CHECK_BATCH_JOB,
-      { factCheckBatchTaskId },
-      {
-        jobId: factCheckBatchTaskId,
-        attempts: 3,
-        backoff: {
-          type: "exponential",
-          delay: 1000,
-        },
-      },
-    );
-
-    await this.dataSource
-      .createQueryBuilder()
-      .update(FactCheckBatchTaskEntity)
-      .set({
-        bullMqJobId: String(job.id),
-      })
-      .where("id = :taskId", { taskId: factCheckBatchTaskId })
-      .andWhere("status = :status", {
-        status: FactCheckBatchTaskStatus.PENDING,
-      })
-      .execute();
   }
 
   private getValidationLimits(): AnalyzeTurnValidationLimits {

@@ -18,3 +18,10 @@ export class AnalyzeTurnConflictError extends Error {
     this.name = "AnalyzeTurnConflictError";
   }
 }
+
+export class AnalyzeTurnDependencyPendingError extends Error {
+  constructor(readonly turnId: string) {
+    super(`Earlier debate turns must be analyzed before turn: ${turnId}.`);
+    this.name = "AnalyzeTurnDependencyPendingError";
+  }
+}

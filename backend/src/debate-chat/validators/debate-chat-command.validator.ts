@@ -9,9 +9,12 @@ import {
 } from "../dto/debate-chat.dto";
 import { DebateChatInputError } from "../errors/debate-chat.errors";
 
-const MAX_TURN_MESSAGE_CONTENT_LENGTH = 1000;
+const DEFAULT_MAX_TURN_MESSAGE_CONTENT_LENGTH = 500;
 
-export function parseDebateChatCommand(raw: string): DebateChatClientCommand {
+export function parseDebateChatCommand(
+  raw: string,
+  maxMessageLength = DEFAULT_MAX_TURN_MESSAGE_CONTENT_LENGTH,
+): DebateChatClientCommand {
   let parsed: unknown;
 
   try {
@@ -28,7 +31,7 @@ export function parseDebateChatCommand(raw: string): DebateChatClientCommand {
     parsed.type === DEBATE_TURN_SEND_COMMAND ||
     parsed.type === DEBATE_TURN_MESSAGE_SEND_COMMAND
   ) {
-    return validateTurnMessageSendCommand(parsed);
+    return validateTurnMessageSendCommand(parsed, maxMessageLength);
   }
 
   if (parsed.type === DEBATE_TURN_FINALIZE_COMMAND) {
@@ -43,11 +46,15 @@ export function parseDebateChatCommand(raw: string): DebateChatClientCommand {
 function validateTurnSendCommand(
   raw: Record<string, unknown>,
 ): DebateTurnMessageSendCommand {
-  return validateTurnMessageSendCommand(raw);
+  return validateTurnMessageSendCommand(
+    raw,
+    DEFAULT_MAX_TURN_MESSAGE_CONTENT_LENGTH,
+  );
 }
 
 function validateTurnMessageSendCommand(
   raw: Record<string, unknown>,
+  maxMessageLength: number,
 ): DebateTurnMessageSendCommand {
   const payload = raw.payload;
 
@@ -73,9 +80,9 @@ function validateTurnMessageSendCommand(
     sentAt: readOptionalString(raw, "sentAt"),
   };
 
-  if (command.payload.content.length > MAX_TURN_MESSAGE_CONTENT_LENGTH) {
+  if (command.payload.content.length > maxMessageLength) {
     throw new DebateChatInputError(
-      `Turn message content exceeds maximum length: ${MAX_TURN_MESSAGE_CONTENT_LENGTH}.`,
+      `Turn message content exceeds maximum length: ${maxMessageLength}.`,
     );
   }
 

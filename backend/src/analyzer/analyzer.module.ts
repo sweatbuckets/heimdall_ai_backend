@@ -4,8 +4,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { GeminiModule } from "../ai/gemini/gemini.module";
 import { AiInvocationModule } from "../ai/ai-invocation.module";
 import { debateEntities } from "../database/typeorm.config";
-import { FACT_CHECK_QUEUE } from "../fact-check/queues/fact-check.constants";
-import { JudgeModule } from "../judge/judge.module";
+import { FactCheckModule } from "../fact-check/fact-check.module";
 import { ANALYZER_QUEUE } from "./constants";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
@@ -17,17 +16,10 @@ import { AnalyzeTurnService } from "./analyze-turn.service";
 @Module({
   imports: [
     TypeOrmModule.forFeature([...debateEntities]),
-    BullModule.registerQueue(
-      {
-        name: ANALYZER_QUEUE,
-      },
-      {
-        name: FACT_CHECK_QUEUE,
-      },
-    ),
+    BullModule.registerQueue({ name: ANALYZER_QUEUE }),
     GeminiModule,
     AiInvocationModule,
-    JudgeModule,
+    FactCheckModule,
   ],
   providers: [
     AnalyzeTurnService,

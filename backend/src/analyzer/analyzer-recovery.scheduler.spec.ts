@@ -1,7 +1,10 @@
 import { ConfigService } from "@nestjs/config";
 import { SchedulerRegistry } from "@nestjs/schedule";
 import { DataSource } from "typeorm";
-import { DebateTurnAnalysisStatus } from "../debates/domain/debate.enums";
+import {
+  DebatePhase,
+  DebateTurnAnalysisStatus,
+} from "../debates/domain/debate.enums";
 import { AnalyzerRecoveryScheduler } from "./analyzer-recovery.scheduler";
 import { AnalyzerQueueService } from "./queues/analyzer-queue.service";
 
@@ -55,6 +58,9 @@ describe("AnalyzerRecoveryScheduler", () => {
     find.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
         id: "turn-1",
+        debateId: "debate-1",
+        phase: DebatePhase.OPENING,
+        round: 1,
         analysisProcessingStartedAt: staleStartedAt,
       },
     ]);
@@ -86,6 +92,9 @@ describe("AnalyzerRecoveryScheduler", () => {
     find.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
         id: "turn-1",
+        debateId: "debate-1",
+        phase: DebatePhase.OPENING,
+        round: 1,
         analysisProcessingStartedAt: staleStartedAt,
       },
     ]);

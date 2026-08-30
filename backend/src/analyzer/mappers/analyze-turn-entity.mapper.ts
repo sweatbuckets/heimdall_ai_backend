@@ -37,7 +37,7 @@ export function mapAnalyzeTurnOutputToEntities(
 
     return {
       id: componentId,
-      turnId: input.currentTurn.id,
+      turnId: component.turnId,
       isMajorClaim: component.isMajorClaim,
       statement: component.statement.trim(),
       requiresFactCheck: component.requiresFactCheck,
@@ -85,12 +85,12 @@ export function mapAnalyzeTurnOutputToEntities(
 }
 
 export function mapFactCheckTargets(
-  factCheckBatchTaskId: string,
+  factCheckBatchId: string,
   componentIds: string[],
 ): Array<Partial<FactCheckBatchTargetEntity>> {
   return componentIds.map((componentId) => ({
     id: randomUUID(),
-    factCheckBatchTaskId,
+    factCheckBatchId,
     componentId,
   }));
 }

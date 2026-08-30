@@ -1,6 +1,6 @@
 import { ConfigService } from "@nestjs/config";
 import { SchedulerRegistry } from "@nestjs/schedule";
-import { FactCheckBatchTaskService } from "./fact-check-batch-task.service";
+import { FactCheckQueueService } from "./fact-check-queue.service";
 import { FactCheckRecoveryScheduler } from "./fact-check-recovery.scheduler";
 
 describe("FactCheckRecoveryScheduler", () => {
@@ -8,10 +8,10 @@ describe("FactCheckRecoveryScheduler", () => {
   const enqueuePendingTasks = jest.fn();
   const addInterval = jest.fn();
 
-  const taskService = {
+  const queueService = {
     resetStaleProcessingTasks,
     enqueuePendingTasks,
-  } as unknown as FactCheckBatchTaskService;
+  } as unknown as FactCheckQueueService;
   const schedulerRegistry = {
     addInterval,
   } as unknown as SchedulerRegistry;
@@ -27,7 +27,7 @@ describe("FactCheckRecoveryScheduler", () => {
       FACT_CHECK_RECOVERY_INTERVAL_MS: 30_000,
     });
     const scheduler = new FactCheckRecoveryScheduler(
-      taskService,
+      queueService,
       configService,
       schedulerRegistry,
     );
@@ -46,7 +46,7 @@ describe("FactCheckRecoveryScheduler", () => {
       FACT_CHECK_PROCESSING_STALE_MS: 600_000,
     });
     const scheduler = new FactCheckRecoveryScheduler(
-      taskService,
+      queueService,
       configService,
       schedulerRegistry,
     );
@@ -72,7 +72,7 @@ describe("FactCheckRecoveryScheduler", () => {
         }),
     );
     const scheduler = new FactCheckRecoveryScheduler(
-      taskService,
+      queueService,
       new ConfigService(),
       schedulerRegistry,
     );
