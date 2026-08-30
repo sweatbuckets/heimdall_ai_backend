@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { DataSource, EntityManager } from "typeorm";
 import Redis from "ioredis";
 import { AnalyzerQueueService } from "../analyzer/queues/analyzer-queue.service";
@@ -53,7 +54,7 @@ interface NextTurnState {
   currentTurnStartedAt: Date | null;
 }
 
-const MAX_TURN_TOTAL_CONTENT_LENGTH = 1000;
+const DEFAULT_MAX_TURN_TOTAL_CONTENT_LENGTH = 500;
 const APPEND_DRAFT_MESSAGE_SCRIPT = `
 local draftKey = KEYS[1]
 local draftCharCountKey = KEYS[2]
@@ -117,6 +118,7 @@ return 0
 @Injectable()
 export class DebateChatService implements OnModuleDestroy {
   constructor(
+    private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
     private readonly analyzerQueueService: AnalyzerQueueService,
     @Inject(DEBATE_CHAT_REDIS)
@@ -158,7 +160,9 @@ export class DebateChatService implements OnModuleDestroy {
     ]);
 
     return {
-      currentTurn: debate ? mapCurrentTurnToDto(debate) : null,
+      currentTurn: debate
+        ? mapCurrentTurnToDto(debate, this.maxTurnTotalContentLength())
+        : null,
       turns,
       draftMessages,
     };
@@ -212,12 +216,16 @@ export class DebateChatService implements OnModuleDestroy {
       draftDedupKey,
       JSON.stringify(message),
       String(message.content.length),
-      String(MAX_TURN_TOTAL_CONTENT_LENGTH),
+      String(this.maxTurnTotalContentLength()),
       String(DEBATE_CHAT_DRAFT_TTL_SECONDS),
       message.clientMessageId ?? "",
     );
 
-    return parseDraftMessageAppendResult(appendResult, message);
+    return parseDraftMessageAppendResult(
+      appendResult,
+      message,
+      this.maxTurnTotalContentLength(),
+    );
   }
 
   async finalizeTurn(
@@ -398,6 +406,13 @@ export class DebateChatService implements OnModuleDestroy {
     lockOwner: string,
   ): Promise<void> {
     await this.redis.eval(RELEASE_FINALIZE_LOCK_SCRIPT, 1, lockKey, lockOwner);
+  }
+
+  private maxTurnTotalContentLength(): number {
+    return this.configService.get<number>(
+      "DEBATE_TURN_MAX_CONTENT_LENGTH",
+      DEFAULT_MAX_TURN_TOTAL_CONTENT_LENGTH,
+    );
   }
 }
 
@@ -666,6 +681,7 @@ function buildFinalizeLockKey(scope: DebateDraftScope): string {
 function parseDraftMessageAppendResult(
   result: unknown,
   message: DebateChatDraftMessageDto,
+  maxLength: number,
 ): DebateTurnMessageAppendResult {
   if (!Array.isArray(result) || result.length < 1) {
     throw new DebateChatStateError("Redis append result is invalid.");
@@ -695,7 +711,7 @@ function parseDraftMessageAppendResult(
 
   if (status === 0) {
     throw new DebateChatInputError(
-      `Turn total content exceeds maximum length: ${MAX_TURN_TOTAL_CONTENT_LENGTH}.`,
+      `Turn total content exceeds maximum length: ${maxLength}.`,
     );
   }
 
@@ -771,6 +787,7 @@ function mapTurnToDto(turn: Partial<DebateTurnEntity>): DebateChatTurnDto {
 
 function mapCurrentTurnToDto(
   debate: DebateEntity,
+  maxTotalCharacters: number,
 ): DebateChatCurrentTurnDto | null {
   if (
     debate.status !== DebateStatus.IN_PROGRESS ||
@@ -788,7 +805,7 @@ function mapCurrentTurnToDto(
     turnSide: debate.currentTurnSide,
     startedAt: debate.currentTurnStartedAt.toISOString(),
     maxDurationSeconds: getDebateTurnLimitSeconds(debate.currentPhase),
-    maxTotalCharacters: MAX_TURN_TOTAL_CONTENT_LENGTH,
+    maxTotalCharacters,
   };
 }
 

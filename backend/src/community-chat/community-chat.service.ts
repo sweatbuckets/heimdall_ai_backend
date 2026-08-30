@@ -13,6 +13,7 @@ import {
 } from "./domain/community-chat.enums";
 import {
   CommunityDto,
+  CommunityParticipantPreviewDto,
   CommunityMemberDto,
   CommunityMessageDto,
   CommunityOpinionDto,
@@ -73,6 +74,9 @@ export class CommunityChatService {
     const counts = await this.loadMemberCounts(
       communities.map((item) => item.id),
     );
+    const participantPreviews = await this.loadParticipantPreviews(
+      communities.map((item) => item.id),
+    );
     const joinedIds = await this.loadJoinedCommunityIds(
       communities.map((item) => item.id),
       memberId,
@@ -81,6 +85,7 @@ export class CommunityChatService {
       mapCommunity(
         community,
         counts.get(community.id) ?? 0,
+        participantPreviews.get(community.id) ?? [],
         memberId,
         joinedIds.has(community.id),
       ),
@@ -98,7 +103,14 @@ export class CommunityChatService {
     const isJoined = await this.dataSource
       .getRepository(CommunityMemberEntity)
       .exist({ where: { communityId, memberId } });
-    return mapCommunity(community, count, memberId, isJoined);
+    const participantPreviews = await this.loadParticipantPreviews([communityId]);
+    return mapCommunity(
+      community,
+      count,
+      participantPreviews.get(communityId) ?? [],
+      memberId,
+      isJoined,
+    );
   }
 
   async joinCommunity(communityId: string, memberId: string): Promise<void> {
@@ -345,11 +357,38 @@ export class CommunityChatService {
       });
     return new Set(memberships.map((membership) => membership.communityId));
   }
+
+  private async loadParticipantPreviews(
+    communityIds: string[],
+  ): Promise<Map<string, CommunityParticipantPreviewDto[]>> {
+    if (communityIds.length === 0) return new Map();
+    const memberships = await this.dataSource
+      .getRepository(CommunityMemberEntity)
+      .find({
+        where: { communityId: In(communityIds) },
+        relations: { member: true },
+        order: { joinedAt: "ASC" },
+      });
+    const previews = new Map<string, CommunityParticipantPreviewDto[]>();
+    for (const membership of memberships) {
+      const list = previews.get(membership.communityId) ?? [];
+      if (list.length < 3) {
+        list.push({
+          id: membership.member.id,
+          displayName: membership.member.displayName,
+          profileImageUrl: membership.member.profileImageUrl,
+        });
+        previews.set(membership.communityId, list);
+      }
+    }
+    return previews;
+  }
 }
 
 function mapCommunity(
   community: CommunityEntity,
   memberCount: number,
+  participantPreviews: CommunityParticipantPreviewDto[],
   currentMemberId: string,
   isJoined: boolean,
 ): CommunityDto {
@@ -364,6 +403,7 @@ function mapCommunity(
     hostClaim: community.hostClaim,
     hostReasons: community.hostReasons,
     host: { id: community.host.id, displayName: community.host.displayName },
+    participantPreviews,
     memberCount,
     createdAt: community.createdAt.toISOString(),
     isOwnedByCurrentUser: community.hostId === currentMemberId,

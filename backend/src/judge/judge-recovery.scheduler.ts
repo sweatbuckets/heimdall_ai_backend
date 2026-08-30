@@ -59,9 +59,12 @@ export class JudgeRecoveryScheduler implements OnApplicationBootstrap {
         await this.readinessService.tryStartJudge(debate.id);
       }
       const pending = await this.queueService.enqueuePendingTasks();
-      if (reset > 0 || debates.length > 0 || pending > 0) {
+      // Merely finding finalized debates is not recovery work. Keep the
+      // periodic log quiet unless a stale task was reset or a task was
+      // actually enqueued for processing.
+      if (reset > 0 || pending > 0) {
         this.logger.log(
-          `Judge recovery completed. reset=${reset} finalized=${debates.length} pending=${pending}`,
+          `Judge recovery completed. reset=${reset} scanned=${debates.length} pending=${pending}`,
         );
       }
     } catch (error) {

@@ -396,7 +396,10 @@ export class DebateChatWebSocketServer
     let commandId: string | undefined;
 
     try {
-      const command = parseDebateChatCommand(rawDataToString(data));
+      const command = parseDebateChatCommand(
+        rawDataToString(data),
+        this.configService.get<number>("DEBATE_TURN_MAX_CONTENT_LENGTH", 500),
+      );
       commandId = command.id;
 
       if (command.payload.speakerId !== memberId) {

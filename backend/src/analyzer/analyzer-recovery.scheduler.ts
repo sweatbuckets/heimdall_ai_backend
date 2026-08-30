@@ -8,7 +8,7 @@ import { AnalyzerQueueService } from "./queues/analyzer-queue.service";
 
 const ANALYZER_RECOVERY_INTERVAL_NAME = "analyzer-recovery";
 const DEFAULT_ANALYZER_RECOVERY_INTERVAL_MS = 30_000;
-const DEFAULT_ANALYZER_PROCESSING_STALE_MS = 75_000;
+const DEFAULT_ANALYZER_PROCESSING_STALE_MS = 80_000;
 const ANALYZER_RECOVERY_BATCH_SIZE = 100;
 
 @Injectable()

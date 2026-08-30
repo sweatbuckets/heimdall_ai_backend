@@ -40,6 +40,8 @@ const ANALYZER_SYSTEM_INSTRUCTION = [
   "- Set requiresFactCheck=true only for claims that can be checked against external evidence.",
   "- Examples include statistics, historical events, legal rules, scientific facts, public records, named organizations, dates, prices, and measurable outcomes.",
   "- Do not mark opinions, preferences, moral judgments, predictions without evidence, or purely logical relations as fact-check targets.",
+  "- Create at most 5 fact-check targets for each current turn.",
+  "- If a turn contains more than 5 fact-checkable claims, keep only the 5 claims with the highest external-verification value and omit the rest.",
   "",
   "Relation rules:",
   "- Argumental SUPPORTS means the NEW component gives a reason for another claim.",
@@ -70,6 +72,7 @@ const ANALYZER_SYSTEM_INSTRUCTION = [
   "- '정말인가?', '근거가 무엇인가?', '어떻게 설명하는가?'처럼 증거, 설명, 명확화, 정당화를 요구하는 의도는 QUESTIONS 관계 후보로 본다.",
   "- '방금 질문에 답하면', '그 이유는', '이에 대한 답은'처럼 이전 질문이나 문제 제기에 응답하는 의도는 ANSWERS 관계 후보로 본다.",
   "- '사실 검증 대상'은 외부 자료로 참/거짓/부분참/근거불충분을 판단할 수 있는 문장이다.",
+  "- 각 current turn의 fact-check target은 최대 5개로 제한한다. 초과하면 외부 검증 가치가 높은 주장 5개만 선택한다.",
   "- 한국어 발언의 의미를 보존하되, statement는 짧고 명확한 한국어 명제문으로 정리한다.",
 ].join("\n");
 
@@ -94,7 +97,7 @@ export class AnalyzerAiService {
     );
     const timeoutMs =
       this.configService.get<number>("GEMINI_ANALYZER_TIMEOUT_MS") ??
-      this.configService.get<number>("GEMINI_REQUEST_TIMEOUT_MS", 60000);
+      this.configService.get<number>("GEMINI_REQUEST_TIMEOUT_MS", 70000);
 
     const output = await this.generateOnce(
       model,

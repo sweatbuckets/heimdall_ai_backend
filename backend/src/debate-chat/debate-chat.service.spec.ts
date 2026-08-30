@@ -114,7 +114,7 @@ describe("DebateChatService", () => {
       "debate-chat:draft-dedup:debate-1:speaker-a:SIDE_A:OPENING:1",
     );
     expect(evalCall[8]).toBe("5");
-    expect(evalCall[9]).toBe("1000");
+    expect(evalCall[9]).toBe("500");
     expect(evalCall[11]).toBe("client-message-1");
   });
 

@@ -64,7 +64,7 @@ export class FactCheckerAiService {
     );
     const legacyTimeoutMs = this.configService.get<number>(
       "GEMINI_REQUEST_TIMEOUT_MS",
-      60000,
+      90000,
     );
     const groundingTimeoutMs =
       this.configService.get<number>(
@@ -102,7 +102,7 @@ export class FactCheckerAiService {
     const synthesisTimeoutMs =
       this.configService.get<number>(
         "GEMINI_FACT_CHECK_SYNTHESIS_TIMEOUT_MS",
-      ) ?? 60000;
+      ) ?? 70000;
     const maxSourcesPerResult = this.configService.get<number>(
       "FACT_CHECK_MAX_SOURCES_PER_RESULT",
       DEFAULT_MAX_FACT_CHECK_SOURCES_PER_RESULT,

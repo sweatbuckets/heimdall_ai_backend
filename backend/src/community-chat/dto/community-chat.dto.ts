@@ -32,10 +32,17 @@ export interface CommunityDto {
   hostClaim: string;
   hostReasons: string[];
   host: { id: string; displayName: string };
+  participantPreviews: CommunityParticipantPreviewDto[];
   memberCount: number;
   createdAt: string;
   isOwnedByCurrentUser: boolean;
   isJoined: boolean;
+}
+
+export interface CommunityParticipantPreviewDto {
+  id: string;
+  displayName: string;
+  profileImageUrl: string | null;
 }
 
 export interface CommunityMemberDto {

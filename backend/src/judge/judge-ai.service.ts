@@ -47,7 +47,7 @@ export class JudgeAiService {
     const model = this.configService.getOrThrow<string>("GEMINI_JUDGE_MODEL");
     const timeoutMs =
       this.configService.get<number>("GEMINI_JUDGE_TIMEOUT_MS") ??
-      this.configService.get<number>("GEMINI_REQUEST_TIMEOUT_MS", 30000);
+      this.configService.get<number>("GEMINI_REQUEST_TIMEOUT_MS", 40000);
     const output = await withAbortableTimeout(
       (signal) => this.generate(model, input, signal),
       timeoutMs,

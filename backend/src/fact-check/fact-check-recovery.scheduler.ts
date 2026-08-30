@@ -5,7 +5,7 @@ import { FactCheckQueueService } from "./fact-check-queue.service";
 
 const FACT_CHECK_RECOVERY_INTERVAL_NAME = "fact-check-recovery";
 const DEFAULT_FACT_CHECK_RECOVERY_INTERVAL_MS = 30_000;
-const DEFAULT_FACT_CHECK_PROCESSING_STALE_MS = 75_000;
+const DEFAULT_FACT_CHECK_PROCESSING_STALE_MS = 200_000;
 
 @Injectable()
 export class FactCheckRecoveryScheduler implements OnApplicationBootstrap {
