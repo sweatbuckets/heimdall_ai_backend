@@ -1,22 +1,26 @@
 import { ConfigService } from "@nestjs/config";
-import { Job, Queue } from "bullmq";
+import { Job } from "bullmq";
 import { DataSource } from "typeorm";
 import { AnalyzerAiService } from "./analyzer-ai.service";
 import { AnalyzerInputAssembler } from "./analyzer-input.assembler";
 import { AnalyzeTurnService } from "./analyze-turn.service";
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
 import { AnalyzeTurnDependencyPendingError } from "./errors/analyzer.errors";
-import { AnalyzeTurnJobData } from "./queues/analyzer-job.data";
+import { AnalyzeRoundJobData } from "./queues/analyzer-job.data";
 import {
   DebatePhase,
   DebateSide,
   DebateStatus,
   DebateTurnAnalysisStatus,
+  FactCheckBatchStatus,
+  FactCheckStage,
+  FactCheckStageTaskStatus,
 } from "../debates/domain/debate.enums";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
 import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
-import { FactCheckBatchTaskEntity } from "../debates/entities/fact-check-batch-task.entity";
-import { JudgeReadinessService } from "../judge/judge-readiness.service";
+import { FactCheckBatchEntity } from "../debates/entities/fact-check-batch.entity";
+import { FactCheckStageTaskEntity } from "../debates/entities/fact-check-stage-task.entity";
+import { FactCheckQueueService } from "../fact-check/fact-check-queue.service";
 import { AiInvocationCancellationService } from "../ai/ai-invocation-cancellation.service";
 
 interface UpdateExecutionResult {
@@ -104,9 +108,9 @@ class MockDataSource {
     rootAffectedResults: number[],
     turn: Partial<DebateTurnEntity> | null = null,
     private readonly componentCount = 0,
-    private readonly factCheckTask: Partial<FactCheckBatchTaskEntity> | null = null,
+    private readonly factCheckBatch: Partial<FactCheckBatchEntity> | null = null,
     completionAffected = 2,
-    private readonly incompleteEarlierTurnCount = 0,
+    private readonly failedPredecessorCount = 0,
     roundTurns?: Array<Partial<DebateTurnEntity>>,
   ) {
     this.allRootQueryBuilders = rootAffectedResults.map(
@@ -149,7 +153,7 @@ class MockDataSource {
     if (entity === DebateTurnEntity) {
       return new MockRepository(
         this.turn,
-        this.incompleteEarlierTurnCount,
+        this.failedPredecessorCount,
         this.roundTurns,
       );
     }
@@ -158,8 +162,12 @@ class MockDataSource {
       return new MockRepository(null, this.componentCount);
     }
 
-    if (entity === FactCheckBatchTaskEntity) {
-      return new MockRepository(this.factCheckTask);
+    if (entity === FactCheckBatchEntity) {
+      return new MockRepository(this.factCheckBatch);
+    }
+
+    if (entity === FactCheckStageTaskEntity) {
+      return new MockRepository(null);
     }
 
     throw new Error("Unexpected repository entity.");
@@ -226,7 +234,7 @@ describe("AnalyzeTurnService", () => {
     aiService: {
       analyze: jest.Mock<Promise<AnalyzeTurnOutput>, [AnalyzeTurnInput]>;
     };
-    queue: { add: jest.Mock };
+    queueService: { enqueueGroundingTask: jest.Mock };
   } {
     const assembler = {
       assemble: jest
@@ -238,8 +246,8 @@ describe("AnalyzeTurnService", () => {
         .fn<Promise<AnalyzeTurnOutput>, [AnalyzeTurnInput]>()
         .mockResolvedValue(emptyOutput),
     };
-    const queue = {
-      add: jest.fn().mockResolvedValue({ id: "fact-check-job-1" }),
+    const queueService = {
+      enqueueGroundingTask: jest.fn().mockResolvedValue("fact-check-job-1"),
     };
 
     return {
@@ -248,37 +256,36 @@ describe("AnalyzeTurnService", () => {
         assembler as unknown as AnalyzerInputAssembler,
         aiService as unknown as AnalyzerAiService,
         new MockConfigService() as unknown as ConfigService,
-        queue as unknown as Queue,
-        {
-          tryStartJudge: jest.fn().mockResolvedValue(undefined),
-        } as unknown as JudgeReadinessService,
+        queueService as unknown as FactCheckQueueService,
         new AiInvocationCancellationService(),
       ),
       assembler,
       aiService,
-      queue,
+      queueService,
     };
   }
 
   function createJob(
     attemptsMade: number,
     attempts: number,
-  ): Job<AnalyzeTurnJobData> {
+  ): Job<AnalyzeRoundJobData> {
     return {
       attemptsMade,
       opts: { attempts },
-    } as Job<AnalyzeTurnJobData>;
+    } as Job<AnalyzeRoundJobData>;
   }
 
   it("claims both PENDING turns and completes a round in one transaction", async () => {
     const dataSource = new MockDataSource([2]);
-    const { service, assembler, aiService } = createService(dataSource);
+    const { service, assembler, aiService, queueService } =
+      createService(dataSource);
 
     const result = await service.analyzeTurn(turnId);
 
     expect(assembler.assemble).toHaveBeenCalledWith(turnId);
     expect(aiService.analyze).toHaveBeenCalledWith(input, expect.anything());
     expect(dataSource.manager.inserts).toHaveLength(0);
+    expect(queueService.enqueueGroundingTask).not.toHaveBeenCalled();
     expect(dataSource.manager.completionQueryBuilder.sets).toContainEqual({
       analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
       analysisProcessingStartedAt: null,
@@ -292,7 +299,7 @@ describe("AnalyzeTurnService", () => {
       componentCount: 0,
       argumentalRelationCount: 0,
       interactionalRelationCount: 0,
-      factCheckBatchTaskId: null,
+      factCheckBatchId: null,
       skipped: false,
     });
   });
@@ -323,12 +330,35 @@ describe("AnalyzeTurnService", () => {
       0,
       null,
       1,
-      1,
+      0,
     );
     const { service, assembler, aiService } = createService(dataSource);
 
     await expect(service.analyzeTurn(turnId)).rejects.toThrow(
       AnalyzeTurnDependencyPendingError,
+    );
+    expect(assembler.assemble).not.toHaveBeenCalled();
+    expect(aiService.analyze).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting when an earlier round has permanently failed", async () => {
+    const dataSource = new MockDataSource(
+      [0],
+      {
+        id: turnId,
+        debateId: "debate-1",
+        sequence: 3,
+        analysisStatus: DebateTurnAnalysisStatus.PENDING,
+      },
+      0,
+      null,
+      2,
+      1,
+    );
+    const { service, assembler, aiService } = createService(dataSource);
+
+    await expect(service.analyzeTurn(turnId)).rejects.toThrow(
+      "an earlier round failed",
     );
     expect(assembler.assemble).not.toHaveBeenCalled();
     expect(aiService.analyze).not.toHaveBeenCalled();
@@ -355,9 +385,9 @@ describe("AnalyzeTurnService", () => {
     expect(aiService.analyze).not.toHaveBeenCalled();
   });
 
-  it("stores both source turns and creates one bounded fact-check batch per turn", async () => {
-    const dataSource = new MockDataSource([2, 1, 1]);
-    const { service, aiService, queue } = createService(dataSource);
+  it("stores both source turns and creates one fact-check batch for the round", async () => {
+    const dataSource = new MockDataSource([2]);
+    const { service, aiService, queueService } = createService(dataSource);
     aiService.analyze.mockResolvedValue({
       newComponents: [
         {
@@ -390,16 +420,29 @@ describe("AnalyzeTurnService", () => {
         expect.objectContaining({ turnId: "turn-2" }),
       ]),
     );
-    const taskInserts = dataSource.manager.inserts.filter(
-      ({ entity }) => entity === FactCheckBatchTaskEntity,
+    const batchInserts = dataSource.manager.inserts.filter(
+      ({ entity }) => entity === FactCheckBatchEntity,
     );
-    expect(taskInserts.map(({ values }) => values)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ turnId: "turn-1" }),
-        expect.objectContaining({ turnId: "turn-2" }),
-      ]),
+    expect(batchInserts).toHaveLength(1);
+    expect(batchInserts[0].values).toEqual(
+      expect.objectContaining({
+        debateId: "debate-1",
+        phase: DebatePhase.OPENING,
+        round: 1,
+        status: FactCheckBatchStatus.PENDING,
+      }),
     );
-    expect(queue.add).toHaveBeenCalledTimes(2);
+    const stageInserts = dataSource.manager.inserts.filter(
+      ({ entity }) => entity === FactCheckStageTaskEntity,
+    );
+    expect(stageInserts).toHaveLength(1);
+    expect(stageInserts[0].values).toEqual(
+      expect.objectContaining({
+        stage: FactCheckStage.GROUNDING,
+        status: FactCheckStageTaskStatus.PENDING,
+      }),
+    );
+    expect(queueService.enqueueGroundingTask).toHaveBeenCalledTimes(1);
     expect(result.componentCount).toBe(2);
   });
 
@@ -424,7 +467,7 @@ describe("AnalyzeTurnService", () => {
       componentCount: 0,
       argumentalRelationCount: 0,
       interactionalRelationCount: 0,
-      factCheckBatchTaskId: null,
+      factCheckBatchId: null,
       skipped: true,
     });
   });

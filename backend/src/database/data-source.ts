@@ -25,6 +25,8 @@ import { AddMemberScore20260811000001 } from "../migrations/20260811000001-AddMe
 import { AddCommunityDebateNotifications20260823000000 } from "../migrations/20260823000000-AddCommunityDebateNotifications";
 import { AddCommunityDebateTimeoutNotification20260824000000 } from "../migrations/20260824000000-AddCommunityDebateTimeoutNotification";
 import { AddCommunityDebateStartedNotification20260825000000 } from "../migrations/20260825000000-AddCommunityDebateStartedNotification";
+import { RefactorFactCheckAndJudgeTaskSchema20260828000000 } from "../migrations/20260828000000-RefactorFactCheckAndJudgeTaskSchema";
+import { RefineVerificationStatus20260829000000 } from "../migrations/20260829000000-RefineVerificationStatus";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -62,6 +64,8 @@ const AppDataSource = new DataSource({
     AddCommunityDebateNotifications20260823000000,
     AddCommunityDebateTimeoutNotification20260824000000,
     AddCommunityDebateStartedNotification20260825000000,
+    RefactorFactCheckAndJudgeTaskSchema20260828000000,
+    RefineVerificationStatus20260829000000,
   ],
   migrationsTableName: "migrations",
   synchronize: false,

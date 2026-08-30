@@ -193,8 +193,7 @@ export class DebatesService {
         );
       }
       if (
-        opponentMembership.debateIntent !==
-        CommunityDebateIntent.OPEN_TO_DEBATE
+        opponentMembership.debateIntent !== CommunityDebateIntent.OPEN_TO_DEBATE
       ) {
         throw new ConflictException("The opponent is not ready to debate.");
       }
@@ -248,11 +247,9 @@ export class DebatesService {
     );
     this.pendingInvitations.set(id, { ...dto, timeout });
     this.pendingInvitationByCommunity.set(communityId, id);
-    this.websocketServer.publishDebateRequested(
-      communityId,
-      opponentMemberId,
-      { invitation: dto },
-    );
+    this.websocketServer.publishDebateRequested(communityId, opponentMemberId, {
+      invitation: dto,
+    });
     return dto;
   }
 

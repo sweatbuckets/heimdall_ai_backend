@@ -39,5 +39,11 @@ export function validateFactCheckBatchInput(
         `Fact check target statement must not be empty: ${target.componentId}.`,
       );
     }
+
+    if (!target.turnId.trim() || !Number.isInteger(target.sequence)) {
+      throw new FactCheckInputError(
+        `Fact check target turn metadata is invalid: ${target.componentId}.`,
+      );
+    }
   }
 }

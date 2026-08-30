@@ -15,15 +15,24 @@ import { CommunityStatus } from "../community-chat/domain/community-chat.enums";
 import { CommunityEntity } from "../community-chat/entities/community.entity";
 import { DebateChatService } from "../debate-chat/debate-chat.service";
 import { DebateChatWebSocketServer } from "../debate-chat/debate-chat.websocket-server";
-import { FACT_CHECK_QUEUE } from "../fact-check/queues/fact-check.constants";
+import {
+  FACT_CHECK_GROUNDING_QUEUE,
+  FACT_CHECK_SYNTHESIS_QUEUE,
+} from "../fact-check/queues/fact-check.constants";
 import {
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
+  FactCheckStage,
+  FactCheckStageTaskStatus,
+  JudgeTaskStatus,
 } from "./domain/debate.enums";
 import { DebateEntity } from "./entities/debate.entity";
 import { DebateTurnEntity } from "./entities/debate-turn.entity";
-import { FactCheckBatchTaskEntity } from "./entities/fact-check-batch-task.entity";
+import { FactCheckBatchEntity } from "./entities/fact-check-batch.entity";
+import { FactCheckStageTaskEntity } from "./entities/fact-check-stage-task.entity";
+import { JudgeTaskEntity } from "./entities/judge-task.entity";
+import { JudgeQueueService } from "../judge/judge-queue.service";
 import {
   DEBATE_DURATION_PER_ROUND_MS,
   DEBATE_FIXED_DURATION_MS,
@@ -33,7 +42,7 @@ import { MemberEntity } from "../members/entities/member.entity";
 import { DEBATE_WIN_SCORE_REWARD } from "../members/member-score.constants";
 import { CommunityNotificationService } from "../community-chat/community-notification.service";
 
-const TIMEOUT_POLL_INTERVAL_MS = 2_000;
+const TIMEOUT_POLL_INTERVAL_MS = 30_000;
 const TIMEOUT_BATCH_SIZE = 20;
 const TIMEOUT_ELIGIBLE_STATUSES = [
   DebateStatus.IN_PROGRESS,
@@ -61,8 +70,11 @@ export class DebateTimeoutService {
     private readonly debateChatService: DebateChatService,
     private readonly websocketServer: DebateChatWebSocketServer,
     private readonly communityNotificationService: CommunityNotificationService,
-    @InjectQueue(FACT_CHECK_QUEUE)
-    private readonly factCheckQueue: Queue,
+    @InjectQueue(FACT_CHECK_GROUNDING_QUEUE)
+    private readonly factCheckGroundingQueue: Queue,
+    @InjectQueue(FACT_CHECK_SYNTHESIS_QUEUE)
+    private readonly factCheckSynthesisQueue: Queue,
+    private readonly judgeQueueService: JudgeQueueService,
   ) {}
 
   @Interval(TIMEOUT_POLL_INTERVAL_MS)
@@ -168,13 +180,22 @@ export class DebateTimeoutService {
         select: { id: true },
       });
       const turnIds = turns.map((turn) => turn.id);
+      const batches = await manager.find(FactCheckBatchEntity, {
+        where: { debateId },
+        select: { id: true },
+      });
+      const batchIds = batches.map((batch) => batch.id);
       const tasks =
-        turnIds.length === 0
+        batchIds.length === 0
           ? []
-          : await manager.find(FactCheckBatchTaskEntity, {
-              where: { turnId: In(turnIds) },
-              select: { id: true },
+          : await manager.find(FactCheckStageTaskEntity, {
+              where: { factCheckBatchId: In(batchIds) },
+              select: { id: true, stage: true },
             });
+      const judgeTasks = await manager.find(JudgeTaskEntity, {
+        where: { debateId },
+        select: { id: true },
+      });
       const endedAt = new Date();
 
       await manager.update(
@@ -206,22 +227,49 @@ export class DebateTimeoutService {
           analysisProcessingStartedAt: null,
         },
       );
-      if (turnIds.length > 0) {
+      if (batchIds.length > 0) {
         await manager.update(
-          FactCheckBatchTaskEntity,
+          FactCheckStageTaskEntity,
           {
-            turnId: In(turnIds),
+            factCheckBatchId: In(batchIds),
             status: In([
-              FactCheckBatchTaskStatus.PENDING,
-              FactCheckBatchTaskStatus.PROCESSING,
+              FactCheckStageTaskStatus.PENDING,
+              FactCheckStageTaskStatus.PROCESSING,
             ]),
           },
           {
-            status: FactCheckBatchTaskStatus.FAILED,
+            status: FactCheckStageTaskStatus.FAILED,
+            processingStartedAt: null,
+            failureReason: options.taskFailureReason,
+          },
+        );
+        await manager.update(
+          FactCheckBatchEntity,
+          {
+            id: In(batchIds),
+            status: In([
+              FactCheckBatchStatus.PENDING,
+              FactCheckBatchStatus.PROCESSING,
+            ]),
+          },
+          {
+            status: FactCheckBatchStatus.FAILED,
             failureReason: options.taskFailureReason,
           },
         );
       }
+      await manager.update(
+        JudgeTaskEntity,
+        {
+          debateId,
+          status: In([JudgeTaskStatus.PENDING, JudgeTaskStatus.PROCESSING]),
+        },
+        {
+          status: JudgeTaskStatus.FAILED,
+          processingStartedAt: null,
+          failureReason: options.taskFailureReason,
+        },
+      );
       await manager.update(
         CommunityEntity,
         { id: debate.communityId },
@@ -262,7 +310,8 @@ export class DebateTimeoutService {
         return {
           communityId: debate.communityId,
           turnIds,
-          taskIds: tasks.map((task) => task.id),
+          tasks,
+          judgeTaskIds: judgeTasks.map((task) => task.id),
           notification,
         };
       }
@@ -276,7 +325,8 @@ export class DebateTimeoutService {
       return {
         communityId: debate.communityId,
         turnIds,
-        taskIds: tasks.map((task) => task.id),
+        tasks,
+        judgeTaskIds: judgeTasks.map((task) => task.id),
         notification,
       };
     });
@@ -288,7 +338,10 @@ export class DebateTimeoutService {
       ...claimed.turnIds.map((turnId) =>
         this.analyzerQueueService.cancelAnalyzeTurn(turnId),
       ),
-      ...claimed.taskIds.map((taskId) => this.removeFactCheckJob(taskId)),
+      ...claimed.tasks.map((task) => this.removeFactCheckJob(task)),
+      ...claimed.judgeTaskIds.map((taskId) =>
+        this.judgeQueueService.removeTaskJob(taskId),
+      ),
       this.debateChatService.clearDebateDrafts(debateId),
     ]);
     this.websocketServer.publishDebateEnded(
@@ -303,8 +356,15 @@ export class DebateTimeoutService {
     return true;
   }
 
-  private async removeFactCheckJob(taskId: string): Promise<void> {
-    const job = await this.factCheckQueue.getJob(taskId);
+  private async removeFactCheckJob(task: {
+    id: string;
+    stage: FactCheckStage;
+  }): Promise<void> {
+    const queue =
+      task.stage === FactCheckStage.GROUNDING
+        ? this.factCheckGroundingQueue
+        : this.factCheckSynthesisQueue;
+    const job = await queue.getJob(task.id);
     if (!job) return;
     const state = await job.getState();
     if (state !== "active" && state !== "completed") {

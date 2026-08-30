@@ -85,12 +85,12 @@ export function mapAnalyzeTurnOutputToEntities(
 }
 
 export function mapFactCheckTargets(
-  factCheckBatchTaskId: string,
+  factCheckBatchId: string,
   componentIds: string[],
 ): Array<Partial<FactCheckBatchTargetEntity>> {
   return componentIds.map((componentId) => ({
     id: randomUUID(),
-    factCheckBatchTaskId,
+    factCheckBatchId,
     componentId,
   }));
 }

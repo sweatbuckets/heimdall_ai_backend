@@ -2,7 +2,7 @@ import {
   DebateSide,
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
 } from "../../debates/domain/debate.enums";
 import { JudgeInput, JudgeValidationContext } from "../dto/judge.dto";
 import { JudgeInputError } from "../errors/judge.errors";
@@ -36,16 +36,23 @@ function validateExecutionState(context: JudgeValidationContext): void {
     }
   }
 
-  for (const task of context.factCheckBatchTasks) {
-    if (task.status !== FactCheckBatchTaskStatus.COMPLETED) {
+  for (const batch of context.factCheckBatches) {
+    if (batch.status !== FactCheckBatchStatus.COMPLETED) {
       throw new JudgeInputError(
-        `FactCheckBatchTask is not completed: ${task.id}.`,
+        `FactCheckBatch is not completed: ${batch.id}.`,
       );
     }
   }
 }
 
 function validateParticipants(input: JudgeInput): void {
+  if (!input.debate.sideASpeakerDisplayName.trim()) {
+    throw new JudgeInputError("SIDE_A speaker display name must not be empty.");
+  }
+  if (!input.debate.sideBSpeakerDisplayName.trim()) {
+    throw new JudgeInputError("SIDE_B speaker display name must not be empty.");
+  }
+
   for (const component of input.argumentGraph.components) {
     if (component.speakerSide === DebateSide.SIDE_A) {
       if (component.speakerId !== input.debate.sideASpeakerId) {

@@ -271,6 +271,13 @@ export class CommunityChatService {
   ): Promise<CommunityOpinionDto> {
     await this.joinCommunity(communityId, memberId);
     const repository = this.dataSource.getRepository(CommunityOpinionEntity);
+    const existing = await repository.findOne({
+      where: { communityId, authorId: memberId },
+      select: { id: true },
+    });
+    const action: CommunityOpinionDto["action"] = existing
+      ? "UPDATED"
+      : "CREATED";
     await repository.upsert(
       {
         communityId,
@@ -288,7 +295,7 @@ export class CommunityChatService {
     if (!opinion) {
       throw new Error("Community opinion was not stored.");
     }
-    return mapOpinion(opinion);
+    return { ...mapOpinion(opinion), action };
   }
 
   async assertCommunityExists(communityId: string): Promise<void> {

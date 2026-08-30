@@ -536,9 +536,9 @@ SIDE_B Major Claim <= 1
 | `SUPPORTED` | 긍정적으로 반영 |
 | `CONTRADICTED` | 큰 감점 |
 | `PARTIALLY_SUPPORTED` | 제한적 감점 |
-| `INSUFFICIENT_EVIDENCE` | 근거 부족으로 감점 |
-| `NOT_VERIFIABLE` | 사실 신뢰성 평가에서 중립 또는 제한적 반영 |
-| `OUTDATED_OR_TIME_SENSITIVE` | 단정 수준과 시점 의존성을 고려해 제한적 감점 |
+| `INSUFFICIENT_EVIDENCE` | 거짓으로 단정하지 않고, 근거 없이 확정적으로 주장했는지를 고려 |
+| `NOT_VERIFIABLE` | 거짓으로 단정하지 않고 사실 신뢰성 평가에서는 원칙적으로 중립 |
+| `OUTDATED` | 주장 중요도와 기준 시점의 불일치를 고려해 감점하되 `CONTRADICTED`로 중복 감점하지 않음 |
 
 `requiresFactCheck = false`인 의견, 가치판단, 논리적 주장은 FactCheckResult가 없다는 이유만으로 감점하지 않는다.
 

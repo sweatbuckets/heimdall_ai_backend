@@ -8,25 +8,26 @@ import { ANALYZE_TURN_RESPONSE_SCHEMA } from "../ai/schemas/analyze-turn.schema"
 import { AnalyzeTurnInput, AnalyzeTurnOutput } from "./dto/analyze-turn.dto";
 import { validateAnalyzeTurnOutput } from "./validators/analyze-turn-output.validator";
 import { withAbortableTimeout } from "../ai/gemini/gemini-timeout.util";
+import { getGeminiThinkingLevel } from "../ai/gemini/gemini-thinking-level.util";
 import { EMPTY_DEBATE_TURN_CONTENT } from "../debates/debate-turn-content.constants";
 
 const ANALYZER_SYSTEM_INSTRUCTION = [
   "You are a debate argument graph analyzer.",
-  "Analyze only currentTurns[].content as the source of NEW components.",
-  "currentTurns contains both speakers' turns for one debate round in sequence order.",
+  "Analyze only dynamicRequest.currentTurns[].content as the source of NEW components.",
+  "dynamicRequest.currentTurns contains both speakers' turns for one debate round in sequence order.",
   "Use accumulatedGraph only as context and as possible EXISTING relation targets.",
   "Do not summarize the whole debate.",
   "Do not invent claims that are not present in the current round.",
   "Return JSON only. Do not include markdown, commentary, or code fences.",
   "",
   "Component extraction rules:",
-  "- Set turnId to the exact currentTurns[].id that contains the source statement.",
+  "- Set turnId to the exact dynamicRequest.currentTurns[].id that contains the source statement.",
   "- Every NEW component must belong to exactly one current turn.",
   `- If a turn's trimmed content is exactly \"${EMPTY_DEBATE_TURN_CONTENT}\", create no components, relations, or fact-check targets for that turn. Continue analyzing the other turn normally.`,
   "- Do not expect the user to explicitly label or format a Major Claim.",
   "- In OPENING phase, infer at most one Major Claim only when the content expresses a clear central position about debate.topic.",
   "- Do not create a Major Claim from a greeting, filler, small talk, a mere topic mention, or content without a clear position.",
-  "- Each Major Claim should be a concise proposition derived from its currentTurns[].content and debate.topic.",
+  "- Each Major Claim should be a concise proposition derived from its dynamicRequest.currentTurns[].content and debate.topic.",
   "- Do not create a Major Claim outside OPENING phase.",
   "- If either current speaker already has a Major Claim in accumulatedGraph, do not create another Major Claim for that speaker.",
   "- Extract supporting components for reasons, evidence, explanations, examples, or causal arguments.",
@@ -91,19 +92,13 @@ export class AnalyzerAiService {
     const model = this.configService.getOrThrow<string>(
       "GEMINI_ANALYZER_MODEL",
     );
-    const maxRetries = this.configService.get<number>(
-      "GEMINI_ANALYZER_MAX_RETRIES",
-      0,
-    );
-    const timeoutMs = this.configService.get<number>(
-      "GEMINI_REQUEST_TIMEOUT_MS",
-      120000,
-    );
+    const timeoutMs =
+      this.configService.get<number>("GEMINI_ANALYZER_TIMEOUT_MS") ??
+      this.configService.get<number>("GEMINI_REQUEST_TIMEOUT_MS", 60000);
 
-    const output = await this.generateWithRetry(
+    const output = await this.generateOnce(
       model,
       input,
-      maxRetries,
       timeoutMs,
       abortSignal,
     );
@@ -112,62 +107,49 @@ export class AnalyzerAiService {
     return output;
   }
 
-  private async generateWithRetry(
+  private async generateOnce(
     model: string,
     input: AnalyzeTurnInput,
-    maxRetries: number,
     timeoutMs: number,
     abortSignal?: AbortSignal,
   ): Promise<AnalyzeTurnOutput> {
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      const startedAt = Date.now();
-      try {
-        const result = await withAbortableTimeout(
-          (signal) => this.generate(model, input, signal),
-          timeoutMs,
-          "Gemini analyzer request timed out.",
-          abortSignal,
-        );
-        const usage = result.usageMetadata;
-        this.logger.log(
-          [
-            "Gemini analyzer request completed.",
-            `debateId=${input.debate.id}`,
-            `turnIds=${input.currentTurns.map((turn) => turn.id).join(",")}`,
-            `phase=${input.currentTurns[0]?.phase ?? "UNKNOWN"}`,
-            `round=${input.currentTurns[0]?.round ?? "UNKNOWN"}`,
-            `attempt=${attempt + 1}`,
-            `durationMs=${Date.now() - startedAt}`,
-            `inputTokens=${usage?.promptTokenCount ?? "unknown"}`,
-            `outputTokens=${usage?.candidatesTokenCount ?? "unknown"}`,
-            `thinkingTokens=${usage?.thoughtsTokenCount ?? "unknown"}`,
-            `totalTokens=${usage?.totalTokenCount ?? "unknown"}`,
-          ].join(" "),
-        );
-        return parseRequiredJson<AnalyzeTurnOutput>(result.text);
-      } catch (error) {
-        this.logger.warn(
-          [
-            "Gemini analyzer request failed.",
-            `debateId=${input.debate.id}`,
-            `turnIds=${input.currentTurns.map((turn) => turn.id).join(",")}`,
-            `attempt=${attempt + 1}`,
-            `durationMs=${Date.now() - startedAt}`,
-            `error=${error instanceof Error ? error.message : String(error)}`,
-          ].join(" "),
-        );
-        if (abortSignal?.aborted) throw error;
-        lastError = error;
-
-        if (attempt === maxRetries) {
-          break;
-        }
-      }
+    const startedAt = Date.now();
+    try {
+      const result = await withAbortableTimeout(
+        (signal) => this.generate(model, input, signal),
+        timeoutMs,
+        "Gemini analyzer request timed out.",
+        abortSignal,
+      );
+      const usage = result.usageMetadata;
+      this.logger.log(
+        [
+          "Gemini analyzer request completed.",
+          `debateId=${input.debate.id}`,
+          `turnIds=${input.currentTurns.map((turn) => turn.id).join(",")}`,
+          `phase=${input.currentTurns[0]?.phase ?? "UNKNOWN"}`,
+          `round=${input.currentTurns[0]?.round ?? "UNKNOWN"}`,
+          `durationMs=${Date.now() - startedAt}`,
+          `inputTokens=${usage?.promptTokenCount ?? "unknown"}`,
+          `cachedTokens=${usage?.cachedContentTokenCount ?? 0}`,
+          `outputTokens=${usage?.candidatesTokenCount ?? "unknown"}`,
+          `thinkingTokens=${usage?.thoughtsTokenCount ?? "unknown"}`,
+          `totalTokens=${usage?.totalTokenCount ?? "unknown"}`,
+        ].join(" "),
+      );
+      return parseRequiredJson<AnalyzeTurnOutput>(result.text);
+    } catch (error) {
+      this.logger.warn(
+        [
+          "Gemini analyzer request failed.",
+          `debateId=${input.debate.id}`,
+          `turnIds=${input.currentTurns.map((turn) => turn.id).join(",")}`,
+          `durationMs=${Date.now() - startedAt}`,
+          `error=${error instanceof Error ? error.message : String(error)}`,
+        ].join(" "),
+      );
+      throw error;
     }
-
-    throw lastError;
   }
 
   private async generate(
@@ -182,7 +164,7 @@ export class AnalyzerAiService {
           role: "user",
           parts: [
             {
-              text: JSON.stringify(input),
+              text: serializeAnalyzerPrompt(input),
             },
           ],
         },
@@ -192,12 +174,32 @@ export class AnalyzerAiService {
         systemInstruction: ANALYZER_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: ANALYZE_TURN_RESPONSE_SCHEMA,
-        temperature: 0.1,
+        thinkingConfig: {
+          thinkingLevel: getGeminiThinkingLevel(
+            this.configService,
+            "GEMINI_ANALYZER_THINKING_LEVEL",
+          ),
+        },
       },
     });
 
     return response;
   }
+}
+
+function serializeAnalyzerPrompt(input: AnalyzeTurnInput): string {
+  const phase = input.currentTurns[0]?.phase ?? null;
+  const round = input.currentTurns[0]?.round ?? null;
+
+  return JSON.stringify({
+    debate: input.debate,
+    accumulatedGraph: input.accumulatedGraph,
+    dynamicRequest: {
+      phase,
+      round,
+      currentTurns: input.currentTurns,
+    },
+  });
 }
 
 function assertGeminiApiKey(configService: ConfigService): void {

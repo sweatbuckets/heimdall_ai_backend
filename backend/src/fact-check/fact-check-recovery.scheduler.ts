@@ -1,11 +1,11 @@
 import { Injectable, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { SchedulerRegistry } from "@nestjs/schedule";
-import { FactCheckBatchTaskService } from "./fact-check-batch-task.service";
+import { FactCheckQueueService } from "./fact-check-queue.service";
 
 const FACT_CHECK_RECOVERY_INTERVAL_NAME = "fact-check-recovery";
-const DEFAULT_FACT_CHECK_RECOVERY_INTERVAL_MS = 60_000;
-const DEFAULT_FACT_CHECK_PROCESSING_STALE_MS = 10 * 60_000;
+const DEFAULT_FACT_CHECK_RECOVERY_INTERVAL_MS = 30_000;
+const DEFAULT_FACT_CHECK_PROCESSING_STALE_MS = 75_000;
 
 @Injectable()
 export class FactCheckRecoveryScheduler implements OnApplicationBootstrap {
@@ -13,7 +13,7 @@ export class FactCheckRecoveryScheduler implements OnApplicationBootstrap {
   private recoveryRunning = false;
 
   constructor(
-    private readonly factCheckBatchTaskService: FactCheckBatchTaskService,
+    private readonly factCheckQueueService: FactCheckQueueService,
     private readonly configService: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {}
@@ -47,11 +47,9 @@ export class FactCheckRecoveryScheduler implements OnApplicationBootstrap {
       );
       const staleBefore = new Date(Date.now() - staleMs);
       const resetCount =
-        await this.factCheckBatchTaskService.resetStaleProcessingTasks(
-          staleBefore,
-        );
+        await this.factCheckQueueService.resetStaleProcessingTasks(staleBefore);
       const enqueuedCount =
-        await this.factCheckBatchTaskService.enqueuePendingTasks();
+        await this.factCheckQueueService.enqueuePendingTasks();
 
       if (resetCount > 0 || enqueuedCount > 0) {
         this.logger.log(

@@ -7,8 +7,8 @@ import { DebateTurnEntity } from "../debates/entities/debate-turn.entity";
 import { AnalyzerQueueService } from "./queues/analyzer-queue.service";
 
 const ANALYZER_RECOVERY_INTERVAL_NAME = "analyzer-recovery";
-const DEFAULT_ANALYZER_RECOVERY_INTERVAL_MS = 60_000;
-const DEFAULT_ANALYZER_PROCESSING_STALE_MS = 10 * 60_000;
+const DEFAULT_ANALYZER_RECOVERY_INTERVAL_MS = 30_000;
+const DEFAULT_ANALYZER_PROCESSING_STALE_MS = 75_000;
 const ANALYZER_RECOVERY_BATCH_SIZE = 100;
 
 @Injectable()
@@ -49,7 +49,12 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
       const pendingTurns = await this.dataSource
         .getRepository(DebateTurnEntity)
         .find({
-          select: { id: true },
+          select: {
+            id: true,
+            debateId: true,
+            phase: true,
+            round: true,
+          },
           where: {
             analysisStatus: DebateTurnAnalysisStatus.PENDING,
           },
@@ -57,11 +62,16 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
           take: ANALYZER_RECOVERY_BATCH_SIZE,
         });
       let pendingEnqueuedCount = 0;
+      const pendingRoundKeys = new Set<string>();
 
       for (const turn of pendingTurns) {
+        const roundKey = `${turn.debateId}-${turn.phase}-${turn.round}`;
+        if (pendingRoundKeys.has(roundKey)) continue;
+        pendingRoundKeys.add(roundKey);
         try {
-          await this.analyzerQueueService.enqueuePendingAnalyzeTurn(turn.id);
-          pendingEnqueuedCount += 1;
+          const jobId =
+            await this.analyzerQueueService.enqueuePendingAnalyzeTurn(turn.id);
+          if (jobId) pendingEnqueuedCount += 1;
         } catch (error) {
           this.logger.error(
             `Pending Analyzer enqueue failed. turnId=${turn.id}`,
@@ -78,7 +88,13 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
       const staleTurns = await this.dataSource
         .getRepository(DebateTurnEntity)
         .find({
-          select: { id: true, analysisProcessingStartedAt: true },
+          select: {
+            id: true,
+            debateId: true,
+            phase: true,
+            round: true,
+            analysisProcessingStartedAt: true,
+          },
           where: {
             analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
             analysisProcessingStartedAt: LessThan(staleBefore),
@@ -88,8 +104,12 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
         });
 
       let recoveredCount = 0;
+      const staleRoundKeys = new Set<string>();
 
       for (const turn of staleTurns) {
+        const roundKey = `${turn.debateId}-${turn.phase}-${turn.round}`;
+        if (staleRoundKeys.has(roundKey)) continue;
+        staleRoundKeys.add(roundKey);
         const resetResult = await this.dataSource
           .createQueryBuilder()
           .update(DebateTurnEntity)
@@ -97,7 +117,9 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
             analysisStatus: DebateTurnAnalysisStatus.PENDING,
             analysisProcessingStartedAt: null,
           })
-          .where("id = :turnId", { turnId: turn.id })
+          .where("debate_id = :debateId", { debateId: turn.debateId })
+          .andWhere("phase = :phase", { phase: turn.phase })
+          .andWhere("round = :round", { round: turn.round })
           .andWhere("analysis_status = :status", {
             status: DebateTurnAnalysisStatus.PROCESSING,
           })
@@ -106,16 +128,21 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
           })
           .execute();
 
-        if (resetResult.affected !== 1) {
+        if (!resetResult.affected) {
           continue;
         }
 
         try {
-          await this.analyzerQueueService.enqueueRecoveredAnalyzeTurn(turn.id);
-          recoveredCount += 1;
+          const jobId =
+            await this.analyzerQueueService.enqueueRecoveredAnalyzeTurn(
+              turn.id,
+            );
+          if (jobId) recoveredCount += 1;
         } catch (error) {
           await this.restoreForNextRecovery(
-            turn.id,
+            turn.debateId,
+            turn.phase,
+            turn.round,
             turn.analysisProcessingStartedAt ?? staleBefore,
           );
           this.logger.error(
@@ -141,7 +168,9 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
   }
 
   private async restoreForNextRecovery(
-    turnId: string,
+    debateId: string,
+    phase: string,
+    round: number,
     processingStartedAt: Date,
   ): Promise<void> {
     await this.dataSource
@@ -151,7 +180,9 @@ export class AnalyzerRecoveryScheduler implements OnApplicationBootstrap {
         analysisStatus: DebateTurnAnalysisStatus.PROCESSING,
         analysisProcessingStartedAt: processingStartedAt,
       })
-      .where("id = :turnId", { turnId })
+      .where("debate_id = :debateId", { debateId })
+      .andWhere("phase = :phase", { phase })
+      .andWhere("round = :round", { round })
       .andWhere("analysis_status = :status", {
         status: DebateTurnAnalysisStatus.PENDING,
       })

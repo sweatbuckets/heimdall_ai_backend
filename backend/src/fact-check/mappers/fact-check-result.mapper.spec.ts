@@ -40,7 +40,7 @@ describe("mapFactCheckBatchOutputToEntities", () => {
 
     expect(mapped.results).toHaveLength(1);
     expect(mapped.results[0]).toMatchObject({
-      factCheckBatchTaskId: "task-1",
+      factCheckBatchId: "task-1",
       componentId: "component-1",
       status: VerificationStatus.SUPPORTED,
       reason: "Supported by the source.",

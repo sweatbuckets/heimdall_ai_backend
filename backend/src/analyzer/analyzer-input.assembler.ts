@@ -97,15 +97,6 @@ export class AnalyzerInputAssembler {
         sideBSpeakerId: requestedTurn.debate.sideBSpeakerId,
         rebuttalQuestionRounds: requestedTurn.debate.rebuttalQuestionRounds,
       },
-      currentTurns: currentTurns.map((currentTurn) => ({
-        id: currentTurn.id,
-        speakerId: currentTurn.speakerId,
-        speakerSide: currentTurn.speakerSide,
-        phase: currentTurn.phase,
-        round: currentTurn.round,
-        sequence: currentTurn.sequence,
-        content: currentTurn.content,
-      })),
       accumulatedGraph: {
         components: existingComponents,
         argumentalRelations: argumentalRelations.map((relation) => ({
@@ -119,6 +110,15 @@ export class AnalyzerInputAssembler {
           type: relation.type,
         })),
       },
+      currentTurns: currentTurns.map((currentTurn) => ({
+        id: currentTurn.id,
+        speakerId: currentTurn.speakerId,
+        speakerSide: currentTurn.speakerSide,
+        phase: currentTurn.phase,
+        round: currentTurn.round,
+        sequence: currentTurn.sequence,
+        content: currentTurn.content,
+      })),
     };
   }
 

@@ -5,9 +5,11 @@ import {
   DebateSide,
   DebateStatus,
   DebateTurnAnalysisStatus,
-  FactCheckBatchTaskStatus,
+  FactCheckBatchStatus,
+  JudgeTaskStatus,
   VerificationStatus,
 } from "../debates/domain/debate.enums";
+import { JudgeTaskEntity } from "../debates/entities/judge-task.entity";
 import { JudgeAiService } from "./judge-ai.service";
 import { JudgeInputAssembler } from "./judge-input.assembler";
 import { JudgeService } from "./judge.service";
@@ -46,6 +48,11 @@ class MockUpdateQueryBuilder {
 
 class MockEntityManager {
   public readonly insertedValues: unknown[] = [];
+  public readonly updates: Array<{
+    entity: unknown;
+    criteria: object;
+    values: object;
+  }> = [];
   public readonly increments: Array<{
     criteria: object;
     propertyPath: string;
@@ -58,7 +65,14 @@ class MockEntityManager {
     this.insertedValues.push(value);
   }
 
-  async findOne(_entity: unknown, _options: object): Promise<object> {
+  async findOne(entity: unknown, _options: object): Promise<object> {
+    if (entity === JudgeTaskEntity) {
+      return {
+        id: "judge-task-1",
+        debateId: "debate-1",
+        status: JudgeTaskStatus.PROCESSING,
+      };
+    }
     return {
       id: "debate-1",
       communityId: "community-1",
@@ -79,10 +93,13 @@ class MockEntityManager {
   }
 
   async update(
-    _entity: unknown,
-    _criteria: object,
-    _values: object,
-  ): Promise<void> {}
+    entity: unknown,
+    criteria: object,
+    values: object,
+  ): Promise<UpdateExecutionResult> {
+    this.updates.push({ entity, criteria, values });
+    return { affected: 1 };
+  }
 
   createQueryBuilder(): MockUpdateQueryBuilder {
     return new MockUpdateQueryBuilder(this.updateAffected);
@@ -116,7 +133,9 @@ describe("JudgeService", () => {
         id: "debate-1",
         topic: "Should attendance count toward grades?",
         sideASpeakerId: "speaker-a",
+        sideASpeakerDisplayName: "Alice",
         sideBSpeakerId: "speaker-b",
+        sideBSpeakerDisplayName: "Bob",
         rebuttalQuestionRounds: 2,
       },
       argumentGraph: {
@@ -152,10 +171,10 @@ describe("JudgeService", () => {
           analysisStatus: DebateTurnAnalysisStatus.COMPLETED,
         },
       ],
-      factCheckBatchTasks: [
+      factCheckBatches: [
         {
           id: "task-1",
-          status: FactCheckBatchTaskStatus.COMPLETED,
+          status: FactCheckBatchStatus.COMPLETED,
         },
       ],
       hasExistingJudgmentResult: false,
@@ -209,7 +228,7 @@ describe("JudgeService", () => {
     const dataSource = new MockDataSource(1);
     const { service, aiService } = createService(dataSource);
 
-    const result = await service.judgeDebate("debate-1");
+    const result = await service.judgeDebate("debate-1", "judge-task-1");
 
     expect(aiService.judge).toHaveBeenCalledWith(
       assembled.input,
@@ -228,6 +247,17 @@ describe("JudgeService", () => {
         value: 20,
       },
     ]);
+    expect(dataSource.manager.updates).toContainEqual({
+      entity: JudgeTaskEntity,
+      criteria: {
+        id: "judge-task-1",
+        status: JudgeTaskStatus.PROCESSING,
+      },
+      values: expect.objectContaining({
+        status: JudgeTaskStatus.COMPLETED,
+        processingStartedAt: null,
+      }),
+    });
     expect(result.debateId).toBe("debate-1");
   });
 
@@ -241,7 +271,7 @@ describe("JudgeService", () => {
       sideBFactualReliabilityScore: 21,
     });
 
-    await service.judgeDebate("debate-1");
+    await service.judgeDebate("debate-1", "judge-task-1");
 
     expect(dataSource.manager.increments).toHaveLength(0);
   });
@@ -257,9 +287,9 @@ describe("JudgeService", () => {
       },
     });
 
-    await expect(service.judgeDebate("debate-1")).rejects.toThrow(
-      JudgeInputError,
-    );
+    await expect(
+      service.judgeDebate("debate-1", "judge-task-1"),
+    ).rejects.toThrow(JudgeInputError);
     expect(aiService.judge).not.toHaveBeenCalled();
   });
 
@@ -267,9 +297,9 @@ describe("JudgeService", () => {
     const dataSource = new MockDataSource(0);
     const { service } = createService(dataSource);
 
-    await expect(service.judgeDebate("debate-1")).rejects.toThrow(
-      JudgeConflictError,
-    );
+    await expect(
+      service.judgeDebate("debate-1", "judge-task-1"),
+    ).rejects.toThrow(JudgeConflictError);
     expect(dataSource.manager.insertedValues).toHaveLength(1);
   });
 });

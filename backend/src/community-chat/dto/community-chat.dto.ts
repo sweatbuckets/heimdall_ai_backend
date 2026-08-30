@@ -70,6 +70,7 @@ export interface CommunityOpinionDto {
   reasons: string[];
   createdAt: string;
   updatedAt: string;
+  action?: "CREATED" | "UPDATED";
 }
 
 export interface CommunityMessageDto {

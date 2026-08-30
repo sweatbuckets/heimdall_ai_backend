@@ -6,7 +6,6 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
-  OneToOne,
   PrimaryGeneratedColumn,
   Unique,
 } from "typeorm";
@@ -17,7 +16,6 @@ import {
 } from "../domain/debate.enums";
 import { DebateEntity } from "./debate.entity";
 import { ArgumentComponentEntity } from "./argument-component.entity";
-import { FactCheckBatchTaskEntity } from "./fact-check-batch-task.entity";
 import { DebateTurnVoteEntity } from "./debate-turn-vote.entity";
 
 @Entity("debate_turn")
@@ -86,9 +84,6 @@ export class DebateTurnEntity {
 
   @OneToMany(() => ArgumentComponentEntity, (component) => component.turn)
   components: ArgumentComponentEntity[];
-
-  @OneToOne(() => FactCheckBatchTaskEntity, (task) => task.turn)
-  factCheckBatchTask: FactCheckBatchTaskEntity | null;
 
   @OneToMany(() => DebateTurnVoteEntity, (vote) => vote.turn)
   votes: DebateTurnVoteEntity[];
