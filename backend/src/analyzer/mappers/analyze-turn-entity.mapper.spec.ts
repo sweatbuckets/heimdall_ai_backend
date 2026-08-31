@@ -37,9 +37,7 @@ describe("mapAnalyzeTurnOutputToEntities", () => {
         },
       ],
       accumulatedGraph: {
-        components: [],
-        argumentalRelations: [],
-        interactionalRelations: [],
+        graphItems: [],
       },
     };
     const output: AnalyzeTurnOutput = {

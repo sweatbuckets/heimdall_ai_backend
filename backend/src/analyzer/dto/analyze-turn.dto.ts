@@ -5,6 +5,34 @@ import {
   InteractionalRelationType,
 } from "../../debates/domain/debate.enums";
 
+export type ExistingGraphItem =
+  | {
+      kind: "COMPONENT";
+      id: string;
+      turnId: string;
+      speakerId: string;
+      speakerSide: DebateSide;
+      phase: DebatePhase;
+      round: number;
+      turnSequence: number;
+      statement: string;
+      isMajorClaim: boolean;
+    }
+  | {
+      kind: "ARGUMENTAL_RELATION";
+      id: string;
+      fromComponentId: string;
+      toComponentId: string;
+      type: ArgumentalRelationType;
+    }
+  | {
+      kind: "INTERACTIONAL_RELATION";
+      id: string;
+      fromComponentId: string;
+      toComponentId: string;
+      type: InteractionalRelationType;
+    };
+
 export interface ExistingComponent {
   id: string;
   turnId: string;
@@ -38,9 +66,7 @@ export interface AnalyzeTurnInput {
     rebuttalQuestionRounds: number;
   };
   accumulatedGraph: {
-    components: ExistingComponent[];
-    argumentalRelations: ExistingArgumentalRelation[];
-    interactionalRelations: ExistingInteractionalRelation[];
+    graphItems: ExistingGraphItem[];
   };
   currentTurns: Array<{
     id: string;

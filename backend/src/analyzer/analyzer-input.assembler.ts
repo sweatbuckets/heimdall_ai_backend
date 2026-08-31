@@ -1,7 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, LessThan, Repository } from "typeorm";
-import { AnalyzeTurnInput, ExistingComponent } from "./dto/analyze-turn.dto";
+import {
+  AnalyzeTurnInput,
+  ExistingComponent,
+  ExistingGraphItem,
+} from "./dto/analyze-turn.dto";
 import { AnalyzeTurnInputError } from "./errors/analyzer.errors";
 import { DebateSide } from "../debates/domain/debate.enums";
 import { ArgumentComponentEntity } from "../debates/entities/argument-component.entity";
@@ -76,9 +80,15 @@ export class AnalyzerInputAssembler {
       },
     });
 
-    const existingComponents = accumulatedTurns.flatMap((turn) =>
-      this.mapTurnComponents(turn),
-    );
+    // Keep the graph serialization deterministic so identical history shares
+    // the longest possible prompt prefix across Analyzer requests.
+    const existingComponents = accumulatedTurns
+      .flatMap((turn) => this.mapTurnComponents(turn))
+      .sort(
+        (left, right) =>
+          left.turnSequence - right.turnSequence ||
+          left.id.localeCompare(right.id),
+      );
 
     const existingComponentIds = existingComponents.map(
       (component) => component.id,
@@ -88,6 +98,41 @@ export class AnalyzerInputAssembler {
       await this.findArgumentalRelations(existingComponentIds);
     const interactionalRelations =
       await this.findInteractionalRelations(existingComponentIds);
+    const graphItemsWithCreatedAt = [
+      ...existingComponents.map((component) => ({
+        kind: "COMPONENT" as const,
+        ...component,
+        createdAt:
+          accumulatedTurns
+            .find((turn) => turn.id === component.turnId)
+            ?.components.find((candidate) => candidate.id === component.id)
+            ?.createdAt.toISOString() ?? "",
+      })),
+      ...argumentalRelations.map((relation) => ({
+        kind: "ARGUMENTAL_RELATION" as const,
+        id: relation.id,
+        fromComponentId: relation.fromComponentId,
+        toComponentId: relation.toComponentId,
+        type: relation.type,
+        createdAt: relation.createdAt.toISOString(),
+      })),
+      ...interactionalRelations.map((relation) => ({
+        kind: "INTERACTIONAL_RELATION" as const,
+        id: relation.id,
+        fromComponentId: relation.fromComponentId,
+        toComponentId: relation.toComponentId,
+        type: relation.type,
+        createdAt: relation.createdAt.toISOString(),
+      })),
+    ].sort((left, right) => {
+      return (
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id)
+      );
+    });
+    const graphItems: ExistingGraphItem[] = graphItemsWithCreatedAt.map(
+      ({ createdAt: _createdAt, ...item }) => item,
+    );
 
     return {
       debate: {
@@ -98,17 +143,7 @@ export class AnalyzerInputAssembler {
         rebuttalQuestionRounds: requestedTurn.debate.rebuttalQuestionRounds,
       },
       accumulatedGraph: {
-        components: existingComponents,
-        argumentalRelations: argumentalRelations.map((relation) => ({
-          fromComponentId: relation.fromComponentId,
-          toComponentId: relation.toComponentId,
-          type: relation.type,
-        })),
-        interactionalRelations: interactionalRelations.map((relation) => ({
-          fromComponentId: relation.fromComponentId,
-          toComponentId: relation.toComponentId,
-          type: relation.type,
-        })),
+        graphItems,
       },
       currentTurns: currentTurns.map((currentTurn) => ({
         id: currentTurn.id,
@@ -161,6 +196,7 @@ export class AnalyzerInputAssembler {
         fromComponentId: In(componentIds),
         toComponentId: In(componentIds),
       },
+      order: { createdAt: "ASC", id: "ASC" },
     });
   }
 
@@ -176,6 +212,7 @@ export class AnalyzerInputAssembler {
         fromComponentId: In(componentIds),
         toComponentId: In(componentIds),
       },
+      order: { createdAt: "ASC", id: "ASC" },
     });
   }
 }
