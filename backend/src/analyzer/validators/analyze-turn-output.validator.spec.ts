@@ -39,8 +39,9 @@ describe("validateAnalyzeTurnOutput", () => {
       },
     ],
     accumulatedGraph: {
-      components: [
+      graphItems: [
         {
+          kind: "COMPONENT",
           id: "existing-1",
           turnId: "turn-0",
           speakerId: "speaker-b",
@@ -52,8 +53,6 @@ describe("validateAnalyzeTurnOutput", () => {
           isMajorClaim: true,
         },
       ],
-      argumentalRelations: [],
-      interactionalRelations: [],
     },
   };
 

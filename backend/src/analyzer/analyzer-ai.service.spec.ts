@@ -35,9 +35,7 @@ describe("AnalyzerAiService", () => {
       },
     ],
     accumulatedGraph: {
-      components: [],
-      argumentalRelations: [],
-      interactionalRelations: [],
+      graphItems: [],
     },
   };
 

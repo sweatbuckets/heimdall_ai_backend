@@ -161,7 +161,9 @@ function validateReferences(
     output.newComponents.map((component) => component.localKey),
   );
   const existingComponentIds = new Set(
-    input.accumulatedGraph.components.map((component) => component.id),
+    input.accumulatedGraph.graphItems
+      .filter((item) => item.kind === "COMPONENT")
+      .map((component) => component.id),
   );
 
   for (const ref of collectRelationRefs(output)) {
@@ -322,10 +324,12 @@ function validateMajorClaims(
     }
 
     const existingSpeakerMajorClaimCount =
-      input.accumulatedGraph.components.filter(
+      input.accumulatedGraph.graphItems
+        .filter((item) => item.kind === "COMPONENT")
+        .filter(
         (component) =>
           component.speakerId === turn.speakerId && component.isMajorClaim,
-      ).length;
+        ).length;
 
     if (existingSpeakerMajorClaimCount + turnMajorClaims.length > 1) {
       throw new InvalidAnalyzeTurnOutputError(

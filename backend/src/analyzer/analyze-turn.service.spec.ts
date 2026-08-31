@@ -217,9 +217,7 @@ describe("AnalyzeTurnService", () => {
       },
     ],
     accumulatedGraph: {
-      components: [],
-      argumentalRelations: [],
-      interactionalRelations: [],
+      graphItems: [],
     },
   };
   const emptyOutput: AnalyzeTurnOutput = {
