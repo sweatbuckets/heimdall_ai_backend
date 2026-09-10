@@ -29,6 +29,12 @@ Judge task/job (BullMQ)
 
 Analyzer는 라운드당 두 turn을 하나의 job으로 처리한다. 이전 sequence의 turn 분석이 끝나야 다음 라운드가 실행된다. FactCheck는 라운드별 batch이며 Grounding과 Synthesis는 서로 다른 stage task/job이다. Judge는 토론 전체에 하나의 task만 생성된다.
 
+### 파이프라인 개요
+
+아래 이미지는 현재 구현의 주요 실행 경로와 Grounding → Snapshot → Synthesis 분리를 시각화한 것이다.
+
+![Heimdall AI pipeline: Analyzer, Grounding, Synthesis, and Judge](readme_img/ai-pipeline5.png)
+
 ## 2. 공통 Gemini 호출 규칙
 
 AI 서비스는 `@google/genai`의 `GoogleGenAI.models.generateContent()`를 사용한다.
