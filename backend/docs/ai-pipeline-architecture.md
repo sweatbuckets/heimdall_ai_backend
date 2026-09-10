@@ -29,6 +29,12 @@ Judge task/job (BullMQ)
 
 Analyzer는 라운드당 두 turn을 하나의 job으로 처리한다. 이전 sequence의 turn 분석이 끝나야 다음 라운드가 실행된다. FactCheck는 라운드별 batch이며 Grounding과 Synthesis는 서로 다른 stage task/job이다. Judge는 토론 전체에 하나의 task만 생성된다.
 
+### 파이프라인 개요
+
+아래 이미지는 현재 구현의 주요 실행 경로와 Grounding → Snapshot → Synthesis 분리를 시각화한 것이다.
+
+![Heimdall AI pipeline: Analyzer, Grounding, Synthesis, and Judge](readme_img/ai-pipeline5.png)
+
 ## 2. 공통 Gemini 호출 규칙
 
 AI 서비스는 `@google/genai`의 `GoogleGenAI.models.generateContent()`를 사용한다.
@@ -544,7 +550,31 @@ Judge completion은 task, judgment result, debate 상태를 조건부 transactio
 
 모든 task의 `bullMqJobId`, `attemptCount`, `lastErrorCode`, `failureReason`, `processingStartedAt`, `completedAt`가 재시도와 recovery의 기준이다.
 
-## 10. 관측·이벤트
+## 10. 동시성 제어·재시도·유실 방지
+
+각 task worker는 먼저 현재 상태를 조건부로 선점(claim)한다. 애플리케이션에서 읽은 뒤 무조건 저장하지 않고, 기대한 이전 상태를 `WHERE` 조건에 포함한 compare-and-set(CAS) 형태의 update를 사용한다.
+
+| 단계 | claim 조건 | 완료 조건 | 중복/유실 방지 |
+|---|---|---|---|
+| Analyzer | 해당 라운드 두 turn 모두 `analysisStatus=PENDING` | 두 turn 모두 `PROCESSING`인 상태에서 `COMPLETED` update affected 수가 2 | round job ID + predecessor readiness + transaction |
+| Grounding | stage=`GROUNDING`, task=`PENDING` | task가 `PROCESSING`일 때만 완료, snapshot·Synthesis task를 같은 transaction에서 생성 | `(batchId, stage)` unique, deterministic task job ID |
+| Synthesis | stage=`SYNTHESIS`, task=`PENDING` | task와 batch가 각각 기대 상태일 때만 결과 저장·완료 | batch pessimistic lock, 결과 저장과 상태 전환 transaction |
+| Judge | debate가 `DEBATE_FINALIZED`, Judge task 없음 | task=`PROCESSING`, debate=`JUDGING`일 때만 judgment/result 완료 | `judge_task.debateId` unique, debate row lock, judgment 중복 확인 |
+
+경합으로 claim에 실패한 worker는 이미 처리된 결과를 확인해 후속 job을 보완하거나 종료한다. 완료 단계의 `affected !== 1`, 예상 상태 불일치, 실패한 unique insert는 conflict로 처리해 부분 결과를 성공으로 보고하지 않는다.
+
+### 큐 유실 방지
+
+- DB task row를 먼저 만들고 BullMQ job을 enqueue한다. enqueue 후 `bullMqJobId`를 조건부로 기록한다.
+- 모든 job은 task ID 또는 debate/phase/round 조합을 deterministic `jobId`로 사용하므로 recovery scheduler가 같은 작업을 중복 생성하지 않는다.
+- `ensureJob()`는 기존 job이 active/delayed/waiting이면 재사용하고, failed job만 retry하며, completed job은 정리 후 새 job을 만든다.
+- worker가 task를 선점한 뒤 프로세스가 중단되면 `processingStartedAt` 기반 stale recovery가 task를 `PENDING`으로 되돌리고 다시 enqueue한다.
+- 최종 시도 실패는 `FAILED`로 남겨 무한 재시도를 막고, 수동 retry가 가능한 Judge는 stale 조건을 다시 확인한다.
+- debate가 `FAILED`이거나 invocation이 취소된 경우 AI 응답을 저장하지 않고 task를 실패/종료 상태로 정리한다.
+
+따라서 이 파이프라인의 동시성 안정성은 단일 CAS만이 아니라 `조건부 상태 전이 + row lock + unique 제약 + deterministic job ID + recovery polling + transaction`의 조합으로 보장한다.
+
+## 11. 관측·이벤트
 
 각 worker는 시작/완료/재시도/영구 실패 로그를 남긴다. 주요 로그 필드는 `jobId`, `taskId`, `debateId`, `phase`, `round`, `attempt`, `durationMs`다. AI 호출 완료 로그에는 token usage도 포함된다.
 
@@ -562,7 +592,7 @@ interface DebateProcessingEvent {
 
 이 event는 현재 영속 저장하지 않는다. 재접속 후 stage 이력까지 복원하려면 별도 stage history 테이블 또는 snapshot API가 필요하다.
 
-## 11. 기준 코드
+## 12. 기준 코드
 
 - Analyzer: `src/analyzer/analyzer-ai.service.ts`, `src/analyzer/analyzer-input.assembler.ts`, `src/analyzer/analyze-turn.service.ts`
 - FactCheck: `src/fact-check/fact-checker-ai.service.ts`, `src/fact-check/fact-check-input.assembler.ts`, `src/fact-check/fact-check-grounding-task.service.ts`, `src/fact-check/fact-check-synthesis-task.service.ts`
